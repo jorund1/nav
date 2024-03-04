@@ -4,5 +4,5 @@
 cd /source
 while inotifywait -e modify -e move -e create -e delete -r --exclude \# /source/python/nav/web/sass
 do
-  /opt/venvs/nav/bin/python setup.py build_sass
+  (cd python/nav/web/static/js && npm run build:sass:prod)
 done
