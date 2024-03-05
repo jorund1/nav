@@ -9,7 +9,7 @@ fi
 
 cd /source
 pip install -vv -e .
-make webpacksass
+make sassbuild
 
 if [[ ! -f "/etc/nav/nav.conf" ]]; then
     echo "Copying initial NAV config files into this container"
