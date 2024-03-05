@@ -1,4 +1,4 @@
-.PHONY: dummy clean distclean testclean docclean doc cssclean webpacksass .FORCE
+.PHONY: dummy clean distclean testclean docclean doc cssclean sassbuild sasswatch .FORCE
 
 dummy:
 	@echo "'make' is no longer used for deployment. See 'doc/intro/install.rst'"
@@ -35,8 +35,10 @@ doc/reference/alerttypes.rst: .FORCE
 cssclean:
 	-rm -rf python/nav/web/static/css
 
-webpacksass: cssclean
-	-(cd python/nav/web/static/js && npm install && npm run build:sass:prod)
-	-echo "\n *** Manually disable running of setuptool's build_sass command and sass-watch.sh script. Then run docker-compose up to test web app with CSS files built by Webpack. *** \n"
+sassbuild: cssclean
+	-(cd frontend && npm ci && npm run build:sass:prod)
+
+sasswatch:
+	-(cd frontend && npm run build:sass:prod)
 
 .FORCE:
