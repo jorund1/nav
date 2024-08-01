@@ -132,10 +132,12 @@ class ManagementProfile(models.Model):
     PROTOCOL_SNMP = 1
     PROTOCOL_NAPALM = 2
     PROTOCOL_SNMPV3 = 3
+    PROTOCOL_HTTP_REST = 4
     PROTOCOL_CHOICES = [
         (PROTOCOL_SNMP, "SNMP"),
         (PROTOCOL_NAPALM, "NAPALM"),
         (PROTOCOL_SNMPV3, "SNMPv3"),
+        (PROTOCOL_HTTP_REST, "HTTP Rest API"),
     ]
     if settings.DEBUG:
         PROTOCOL_CHOICES.insert(0, (PROTOCOL_DEBUG, 'debug'))
