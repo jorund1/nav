@@ -12,6 +12,7 @@
    release-procedure
    writing-a-servicemon-plugin
    adding-environment-probe-support
+   adding-protocol-for-management-profiles
    /howto/using_the_api
    extending-nav-locally
    web-interface-customization
