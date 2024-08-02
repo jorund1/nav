@@ -11,6 +11,7 @@
    javascript
    release-procedure
    writing-a-servicemon-plugin
+   writing-an-ipdevpoll-plugin
    adding-environment-probe-support
    /howto/using_the_api
    extending-nav-locally
