@@ -192,5 +192,17 @@ def metric_path_for_subnet_dhcp(subnet_prefix, metric_name):
         subnet_prefix = subnet_prefix.strNormal()
     return tmpl.format(
         subnet_prefix=escape_metric_name(subnet_prefix),
-        metric_name=metric_name
+        metric_name=metric_name,
+    )
+def metric_path_for_ipdev_subnet_dhcp(subnet_prefix, metric_name, address, port):
+    tmpl = "nav.devices.{address}.dhcp.{port}.subnet.{subnet_prefix}.{metric_name}"
+    if hasattr(subnet_prefix, 'strNormal') and callable(subnet_prefix.strNormal):
+        subnet_prefix = subnet_prefix.strNormal()
+    if hasattr(address, 'strNormal') and callable(address.strNormal):
+        address = address.strNormal()
+    return tmpl.format(
+        address=escape_metric_name(address),
+        port=str(port),
+        subnet_prefix=escape_metric_name(subnet_prefix),
+        metric_name=metric_name,
     )

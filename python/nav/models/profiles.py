@@ -1235,6 +1235,7 @@ class MatchField(models.Model):
     name = VarcharField()
     description = VarcharField(blank=True)
     value_help = VarcharField(
+
         blank=True,
         help_text=_(
             u'Help text for the match field. Displayed by the value '

@@ -565,7 +565,7 @@ class Netbox(models.Model):
         """
         ports_exclude = metric_prefix_for_ports(self.sysname)
         sensors_exclude = metric_prefix_for_sensors(self.sysname)
-        base = metric_prefix_for_device(self.sysname)
+        base = metric_prefix_for_device(self.ip)
 
         nodes = get_all_leaves_below(base, [ports_exclude, sensors_exclude])
         result = []

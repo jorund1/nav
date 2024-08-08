@@ -110,3 +110,31 @@ def test_log_netbox_change_should_not_crash(admin_account, netbox):
     new.category_id = "OTHER"
 
     assert log_netbox_change(admin_account, old, new) is None
+
+# def test_empty_function_field_in_netbox_edit_form_should_delete_respective_netboxinfo_instance(netbox, db):
+#     """
+#     NetboxInfo.value.empty_value is not explicitly declared, but defaults to "",
+#     so empty function fields should be saved as "" in the respective NetboxInfo
+#     instance.
+#     """
+#     url = reverse('seeddb-netbox-edit', args=(netbox.id,))
+#     def post(func):
+#         return client.post(
+#             url,
+#             follow=True,
+#             data={
+#                 "ip": netbox.ip,
+#                 "room": netbox.room_id,
+#                 "category": netbox.category_id,
+#                 "organization": netbox.organization_id,
+#                 "function": func,
+#             },
+#         )
+
+#     assert len(NetboxInfo.objects.filter(netbox=netbox, variable='function')) == 0
+#     post("")
+#     assert len(NetboxInfo.objects.filter(netbox=netbox, variable='function')) == 0
+#     post("foo")
+#     assert NetboxInfo.objects.filter(netbox=netbox, variable='function').get().value == 'foo'
+#     post("")
+#     assert len(NetboxInfo.objects.filter(netbox=netbox, variable='function')) == 0

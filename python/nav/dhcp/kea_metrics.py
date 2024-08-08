@@ -6,7 +6,7 @@ from nav.errors import GeneralException
 from nav.dhcp.generic_metrics import DhcpMetric, DhcpMetricKey, DhcpMetricSource
 from datetime import datetime
 import logging
-from requests import RequestException, JSONDecodeError
+from requests import RequestException, JSONDecodeError, Timeout
 import requests
 import json
 from enum import IntEnum
@@ -44,6 +44,8 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         :param tzinfo:       the timezone of the Kea Control Agent.
         """
         super(*args, **kwargs)
+        self.address = address
+        self.port = port
         scheme = "https" if https else "http"
         self.rest_uri = f"{scheme}://{address}:{port}/"
         self.dhcp_version = dhcp_version
@@ -188,20 +190,24 @@ class KeaDhcpMetricSource(DhcpMetricSource):
                 self.rest_uri,
                 data=post_data,
                 timeout=self.timeout,
+                headers={"Content-Type": "application/json"}
             )
             request_summary["Status"] = "complete"
             request_summary["HTTP Status"] = responses.status_code
             responses.raise_for_status()
             responses = responses.json()
         except JSONDecodeError as err:
+            request_summary["Exception"] = err
             raise KeaException(
                 "Server does not look like a Kea Control Agent; "
                 "expected response content to be JSON",
                 request_summary,
             ) from err
         except RequestException as err:
+            request_summary["Full request"] = repr(responses.request.__dict__)
+            request_summary["Exception"] = err
             raise KeaException(
-                "HTTP-related error during request to server", request_summary
+                f"HTTP-related error during request to server", request_summary
             ) from err
 
         if not isinstance(responses, list):
@@ -236,10 +242,11 @@ class KeaDhcpMetricSource(DhcpMetricSource):
             raise KeaConflict(details=request_summary)
         raise KeaException("Kea returned an unkown status response", request_summary)
 
-    def _parsetime(self, timestamp: str) -> int:
+    def _parsetime(self, timestamp: str) -> float:
         """Parse the timestamp string used in Kea's timeseries into unix time"""
         fmt = "%Y-%m-%d %H:%M:%S.%f"
-        return datetime.strptime(timestamp, fmt).replace(tzinfo=self.tzinfo)
+        return datetime.strptime(timestamp, fmt).replace(tzinfo=self.tzinfo).timestamp()
+
 
 
 def _subnets_of_config(config: dict, ip_version: int) -> list[tuple[int, IP]]:

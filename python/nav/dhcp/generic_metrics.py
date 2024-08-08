@@ -2,10 +2,12 @@ from dataclasses import dataclass
 from enum import Enum
 from IPy import IP
 from nav.metrics import carbon, CONFIG
-from nav.metrics.templates import metric_path_for_subnet_dhcp
+from nav.metrics.templates import metric_path_for_subnet_dhcp, metric_path_for_ipdev_subnet_dhcp
 from typing import Iterator
 from datetime import datetime
 
+
+from time import time
 
 class DhcpMetricKey(Enum):
     TOTAL = "total"  # total addresses managed by dhcp
@@ -48,9 +50,22 @@ class DhcpMetricSource:
         """
         graphite_metrics = []
         for metric in self.fetch_metrics():
-            metric_path = metric_path_for_subnet_dhcp(
+            datapoint = (metric.timestamp, metric.value)
+
+            global_metric_path = metric_path_for_subnet_dhcp(
                 metric.subnet_prefix, str(metric.key)
             )
-            datapoint = (metric.timestamp, metric.value)
-            graphite_metrics.append((metric_path, datapoint))
+            graphite_metrics.append((global_metric_path, datapoint))
+
+            if hasattr(self, "address") and hasattr(self, "port"):
+                ipdev_metric_path = metric_path_for_ipdev_subnet_dhcp(
+                    metric.subnet_prefix, str(metric.key), self.address, self.port
+                )
+                print(ipdev_metric_path)
+                datapoint = (time()-7200, 10)
+                print(datapoint)
+                graphite_metrics.append((ipdev_metric_path, datapoint))
+                break
+
+
         carbon.send_metrics_to(graphite_metrics, host, port)
