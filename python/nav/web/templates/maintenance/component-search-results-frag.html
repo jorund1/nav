@@ -1,12 +1,14 @@
 {% if results %}
     {% for component_type, values in results.items %}
         {% if values %}
-            <h4>{{ component_type }}</h4>
-            <ul>
+        <details open="" name="component-search-results">
+        <summary>{{ component_type }}</summary>
+            <select multiple="multiple" size="10" name="{{ component_type }}" style="display: inline-block;">
                 {% for value in values %}
-                    <li>{{ value }}</li>
+                    <option value="{{ value.id }}">{{ value }}</option>
                 {% endfor %}
-            </ul>
+            </select>
+        </details>
         {% endif %}
     {% endfor %}
 {% else %}

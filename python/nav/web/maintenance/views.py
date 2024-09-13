@@ -348,9 +348,12 @@ def edit(request, task_id=None, start_time=None, **_):
         navpath = NAVPATH + [('New', '')]
         heading = 'New task'
         title = TITLE + " - " + heading
+
+    template = 'maintenance/new_task.html'
+
     return render(
         request,
-        'maintenance/new_task.html',
+        template,
         {
             'active': {'new': True},
             'navpath': navpath,
