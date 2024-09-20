@@ -1,0 +1,2 @@
+## info: Collect graphite metrics from netboxes hosting a DHCP statistics server
+*/1 * * * * navdhcp
