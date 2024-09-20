@@ -60,6 +60,45 @@ class ProtocolSpecificMixIn(object):
                 cfg[field] = self.cleaned_data.get(field)
 
 
+class HttpRestForm(ProtocolSpecificMixIn, forms.ModelForm):
+    PROTOCOL = ManagementProfile.PROTOCOL_HTTP_REST
+    PROTOCOL_CHOICES = PROTOCOL_CHOICES.get(PROTOCOL)
+
+    class Meta(object):
+        model = ManagementProfile
+        configuration_fields = ['https', 'tcp_port', 'service']
+        fields = []
+
+    https = forms.BooleanField(
+        initial=True,
+        required=False,
+        label="Use https",
+        help_text="Uncheck this if http should be used instead of https",
+    )
+    tcp_port = forms.IntegerField(
+        required=True,
+        help_text="TCP port that the HTTP Rest server listens to",
+        min_value=1,
+        max_value=65535,
+    )
+    service = forms.ChoiceField(
+        choices=(
+            (1, 'Kea Control Agent'),
+            (2, 'Palo Alto ARP'),
+        )
+    )
+#    token = forms.Char
+
+
+    # timeout = forms.IntegerField(
+    #     required=False,
+    #     help_text="Timeout value in seconds",
+    #     min_value=1,
+    #     max_value=600,
+    # )
+
+
+
 class DebugForm(ProtocolSpecificMixIn, forms.ModelForm):
     PROTOCOL = ManagementProfile.PROTOCOL_DEBUG
     PROTOCOL_NAME = PROTOCOL_CHOICES.get(PROTOCOL)
