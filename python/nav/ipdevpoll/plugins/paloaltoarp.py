@@ -25,6 +25,7 @@ for example:
 
 """
 
+from collections.abc import Iterable
 import xml.etree.ElementTree as ET
 from typing import Dict
 
@@ -53,14 +54,9 @@ class PaloaltoArp(Arp):
     @defer.inlineCallbacks
     def handle(self):
         """Handle plugin business, return a deferred."""
-
         self._logger.debug("Collecting IP/MAC mappings for Paloalto device")
 
-        api_profiles = netbox.profiles.filter(
-            protocol=self.PROTOCOL, configuration__contains={"service": "Palo Alto ARP"}
-        ).all()
-        api_keys = (profile.configuration["api_key"] for profile in api_profiles)
-        mappings = yield self._get_paloalto_arp_mappings(self.netbox.ip, api_keys)
+        mappings = yield self._get_paloalto_arp_mappings(self.netbox)
 
         if mappings is None:
             self._logger.info("No mappings found for Paloalto device")
@@ -71,10 +67,15 @@ class PaloaltoArp(Arp):
         returnValue(None)
 
     @defer.inlineCallbacks
-    def _get_paloalto_arp_mappings(self, address: str, keys: str):
+    def _get_paloalto_arp_mappings(self, netbox):
         """Get mappings from Paloalto device"""
+        api_profiles = netbox.profiles.filter(
+            protocol=self.PROTOCOL, configuration__contains={"service": "Palo Alto ARP"}
+        ).all()
+        api_keys = (profile.configuration["api_key"] for profile in api_profiles)
+
         mappings = None
-        for key in keys:
+        for key in api_keys:
             arptable = yield self._do_request(address, key)
             if arptable is not None:
                 # process arpdata into an array of mappings
