@@ -37,44 +37,31 @@ from twisted.web.http_headers import Headers
 
 from nav import buildconf
 from nav.ipdevpoll.plugins.arp import Arp
+from nav.models import manage
 
 
 class PaloaltoArp(Arp):
-    configured_devices: Dict[str, str] = {}
-
-    @classmethod
-    def on_plugin_load(cls):
-        """Loads the list of PaloAlto access keys from ipdevpoll.conf into the plugin
-        class instance, so that `can_handle` will be able to answer which devices
-        this plugin can run for.
-        """
-        from nav.ipdevpoll.config import ipdevpoll_conf
-
-        cls._logger.debug("loading paloaltoarp configuration")
-        if 'paloaltoarp' not in ipdevpoll_conf:
-            cls._logger.debug("PaloaltoArp config section NOT found")
-            return
-        cls._logger.debug("PaloaltoArp config section found")
-        cls.configured_devices = dict(ipdevpoll_conf['paloaltoarp'])
+    PROTOCOL = manage.ManagementProfile.PROTOCOL_HTTP_REST
 
     @classmethod
     def can_handle(cls, netbox):
         """Return True if this plugin can handle the given netbox."""
-        return (
-            netbox.sysname in cls.configured_devices
-            or str(netbox.ip) in cls.configured_devices
-        )
+        return netbox.profiles.filter(
+            protocol=self.PROTOCOL, configuration__contains={"service": "Palo Alto ARP"}
+        ).exists()
 
     @defer.inlineCallbacks
     def handle(self):
         """Handle plugin business, return a deferred."""
 
-        api_key = self.configured_devices.get(
-            str(self.netbox.ip), self.configured_devices.get(self.netbox.sysname, "")
-        )
         self._logger.debug("Collecting IP/MAC mappings for Paloalto device")
 
-        mappings = yield self._get_paloalto_arp_mappings(self.netbox.ip, api_key)
+        api_profiles = netbox.profiles.filter(
+            protocol=self.PROTOCOL, configuration__contains={"service": "Palo Alto ARP"}
+        ).all()
+        api_keys = (profile.configuration["api_key"] for profile in api_profiles)
+        mappings = yield self._get_paloalto_arp_mappings(self.netbox.ip, api_keys)
+
         if mappings is None:
             self._logger.info("No mappings found for Paloalto device")
             returnValue(None)
@@ -84,15 +71,16 @@ class PaloaltoArp(Arp):
         returnValue(None)
 
     @defer.inlineCallbacks
-    def _get_paloalto_arp_mappings(self, address: str, key: str):
+    def _get_paloalto_arp_mappings(self, address: str, keys: str):
         """Get mappings from Paloalto device"""
+        mappings = None
+        for key in keys:
+            arptable = yield self._do_request(address, key)
+            if arptable is not None:
+                # process arpdata into an array of mappings
+                mappings = parse_arp(arptable.decode('utf-8'))
+                break
 
-        arptable = yield self._do_request(address, key)
-        if arptable is None:
-            returnValue(None)
-
-        # process arpdata into an array of mappings
-        mappings = parse_arp(arptable.decode('utf-8'))
         returnValue(mappings)
 
     @defer.inlineCallbacks
