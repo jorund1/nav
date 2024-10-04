@@ -56,32 +56,36 @@ class PaloaltoArp(Arp):
         """Handle plugin business, return a deferred."""
         self._logger.debug("Collecting IP/MAC mappings for Paloalto device")
 
-        mappings = yield self._get_paloalto_arp_mappings(self.netbox)
+        netbox = self.netbox
+        address = str(netbox.ip)
+        api_profiles = netbox.profiles.filter(
+            protocol=self.PROTOCOL, configuration__contains={"service": "Palo Alto ARP"}
+        ).all()
+        api_keys = [profile.configuration["api_key"] for profile in api_profiles]
 
-        if mappings is None:
-            self._logger.info("No mappings found for Paloalto device")
-            returnValue(None)
-
-        yield self._process_data(mappings)
+        for key, i in enumerate(api_keys):
+            mappings = yield self._get_paloalto_arp_mappings(address, key)
+            if mappings is not None:
+                yield self._process_data(mappings)
+                break
+            self._logger.info(
+                "Using API key %d of %d: No mappings found for Paloalto device",
+                i,
+                len(api_keys),
+            )
 
         returnValue(None)
 
     @defer.inlineCallbacks
-    def _get_paloalto_arp_mappings(self, netbox):
+    def _get_paloalto_arp_mappings(self, address: str, key: str):
         """Get mappings from Paloalto device"""
-        api_profiles = netbox.profiles.filter(
-            protocol=self.PROTOCOL, configuration__contains={"service": "Palo Alto ARP"}
-        ).all()
-        api_keys = (profile.configuration["api_key"] for profile in api_profiles)
 
-        mappings = None
-        for key in api_keys:
-            arptable = yield self._do_request(address, key)
-            if arptable is not None:
-                # process arpdata into an array of mappings
-                mappings = parse_arp(arptable.decode('utf-8'))
-                break
+        arptable = yield self._do_request(address, key)
+        if arptable is None:
+            returnValue(None)
 
+        # process arpdata into an array of mappings
+        mappings = parse_arp(arptable.decode('utf-8'))
         returnValue(mappings)
 
     @defer.inlineCallbacks
