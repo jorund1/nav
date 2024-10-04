@@ -42,29 +42,21 @@ from nav.models import manage
 
 
 class PaloaltoArp(Arp):
-    PROTOCOL = manage.ManagementProfile.PROTOCOL_HTTP_REST
-
     @classmethod
     def can_handle(cls, netbox):
         """Return True if this plugin can handle the given netbox."""
-        return netbox.profiles.filter(
-            protocol=self.PROTOCOL, configuration__contains={"service": "Palo Alto ARP"}
-        ).exists()
+        return netbox.get_http_rest_management_profiles("Palo Alto ARP").exists()
 
     @defer.inlineCallbacks
     def handle(self):
         """Handle plugin business, return a deferred."""
         self._logger.debug("Collecting IP/MAC mappings for Paloalto device")
 
-        netbox = self.netbox
-        address = str(netbox.ip)
-        api_profiles = netbox.profiles.filter(
-            protocol=self.PROTOCOL, configuration__contains={"service": "Palo Alto ARP"}
-        ).all()
+        api_profiles = netbox.get_http_rest_management_profiles("Palo Alto ARP")
         api_keys = [profile.configuration["api_key"] for profile in api_profiles]
 
-        for key, i in enumerate(api_keys):
-            mappings = yield self._get_paloalto_arp_mappings(address, key)
+        for api_key, i in enumerate(api_keys):
+            mappings = yield self._get_paloalto_arp_mappings(self.netbox.ip, api_key)
             if mappings is not None:
                 yield self._process_data(mappings)
                 break

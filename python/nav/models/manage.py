@@ -343,6 +343,14 @@ class Netbox(models.Model):
         if profiles:
             return profiles[0]
 
+    def get_http_rest_management_profiles(
+            self, service: str
+    ) -> QuerySet:
+        protocol = ManagementProfile.PROTOCOL_HTTP_REST
+        return self.profiles.filter(
+            protocol=protocol, configuration__contains={"service": service}
+        )
+
     def is_up(self):
         """Returns True if the Netbox isn't known to be down or in shadow"""
         return self.up == self.UP_UP
