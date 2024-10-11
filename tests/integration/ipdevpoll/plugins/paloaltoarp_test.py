@@ -1,12 +1,44 @@
 from unittest.mock import Mock
 
 import pytest
+import pytest_twisted
+
 from django.urls import reverse
-from nav.models.manage import ManagementProfile
+from nav.models.manage import ManagementProfile, Netbox
 from nav.ipdevpoll import shadows
 from nav.ipdevpoll.plugins.paloaltoarp import PaloaltoArp
 from nav.ipdevpoll.storage import ContainerRepository
-from twisted.internet.defer import returnValue, inlineCallbacks
+
+@pytest.mark.twisted
+@pytest_twisted.inlineCallbacks
+def test_netbox_with_paloalto_management_profile_should_get_arp_mappings(
+        paloalto_netbox, monkeypatch
+):
+    assert PaloAltoArp.can_handle(paloalto_netbox)
+
+    # Set up a single ipdevpoll job for this netbox:
+    plugin_registry['paloaltoarp'] = PaloAltoArp  # Assure PaloAltoArp is a known ipdevpoll plugin
+    job = JobHandler('paloaltoarp', paloalto_netbox.pk, plugins=['paloaltoarp'])
+    job._create_agentproxy = Mock()  # Disable implicit SNMP requests done during job.run()
+    job._destroy_agentproxy = Mock()
+
+    monkeypatch.setattr(
+        nav.ipdevpoll.plugins.paloaltoarp.PaloaltoArp, "_do_request", _do_request_mock
+    )
+
+    assert paloalto_netbox.arp_set.count() == 0
+
+    yield job.run()
+
+    actual = [(arp.ip, arp.mac) for arp in paloalto_netbox.arp_set.all()]
+    expected = [
+        (IP('192.168.0.1'), '00:00:00:00:00:01'),
+        (IP('192.168.0.2'), '00:00:00:00:00:02'),
+        (IP('192.168.0.3'), '00:00:00:00:00:03'),
+    ]
+    assert sorted(actual) == sorted(expected)
+
+
 
 mock_data = b'''
     <response status="success">
@@ -53,16 +85,39 @@ mock_data = b'''
     </response>
     '''
 
+
 @pytest.fixture
-def paloalto_netbox(localhost, management_profile, db):
-    netbox_url = reverse("seeddb-netbox-edit", args=(localhost.id,))
+def paloalto_netbox(db, client):
+    box = Netbox(
+        ip='127.0.0.1',
+        sysname='localhost.example.org',
+        organization_id='myorg',
+        room_id='myroom',
+        category_id='SRV',
+    )
+    box.save()
+    profile = ManagementProfile(
+        name="PaloAlto Test Management Profile",
+        protocol=ManagementProfile.PROTOCOL_SNMP,  # Correct protocol is set with HTTP POST below
+        configuration={
+            "version": 2,
+            "community": "public",
+            "write": False,
+        },
+    )
+    profile.save()
+
+
+    netbox_url = reverse("seeddb-netbox-edit", args=(box.id,))
     management_profile_url = reverse(
         "seeddb-management-profile-edit", args=(management_profile.id,)
     )
 
-    # Manually sending this post request helps reveal regression bugs in case HTTPRestForm.service.choices keys are altered
-    # since the post's invalid service field should then cause the form cleaning stage to fail. Changing the HTTPRestForm.choice
-    # map to use enums as keys instead of strings would enable static analysis to reveal this.
+    # Manually sending this post request helps reveal regression bugs in case
+    # HTTPRestForm.service.choices keys are altered since the post's then
+    # invalid service field should then cause the form cleaning stage to
+    # fail. Changing the HTTPRestForm.choice map to use enums as keys instead of
+    # strings would enable static analysis to reveal this.
     client.post(
         management_profile_url,
         follow=True,
@@ -79,54 +134,23 @@ def paloalto_netbox(localhost, management_profile, db):
         netbox_url,
         follow=True,
         data={
-            "ip": localhost.ip,
-            "room": localhost.room_id,
-            "category": localhost.category_id,
-            "organization": localhost.organization_id,
+            "ip": box.ip,
+            "room": box.room_id,
+            "category": box.category_id,
+            "organization": box.organization_id,
             "profiles": [management_profile.id],
         },
     )
-    return localhost
+
+    yield box
+    print("teardown test device")
+    box.delete()
+    profile.delete()
 
 
-@inlineCallbacks
+@pytest.mark.twisted
+@pytest_twisted.inlineCallbacks
 def _do_request_mock(address, key, *args, **kwargs):
     if key == "1234":
-        returnValue(mock_data)
-    returnValue(None)
-
-
-@inlineCallbacks
-def test_netbox_with_paloalto_management_profile_should_get_arp_mappings(
-        paloalto_netbox, client, monkeypatch
-):
-    assert PaloAltoArp.can_handle(paloalto_netbox)
-
-
-    monkeypatch.setattr(
-        nav.ipdevpoll.plugins.paloaltoarp.PaloaltoArp, "_do_request", _do_request_mock
-    )
-
-    plugin = PaloaltoArp(netbox=paloalto_netbox, agent=Mock(), containers=ContainerRepository())
-
-    actual = [
-        (arp.ip, arp.mac)
-        for arp
-        in plugin.containers[shadow.Arp].values()
-    ]
-    expected = []
-    assert sorted(actual) == sorted(expected)
-
-    yield plugin.handle()
-
-    actual = [
-        (arp.ip, arp.mac)
-        for arp
-        in plugin.containers[shadow.Arp].values()
-    ]
-    expected = [
-        (IP('192.168.0.1'), '00:00:00:00:00:01'),
-        (IP('192.168.0.2'), '00:00:00:00:00:02'),
-        (IP('192.168.0.3'), '00:00:00:00:00:03'),
-    ]
-    assert sorted(actual) == sorted(expected)
+        pytest_twisted.returnValue(mock_data)
+    pytest_twisted.returnValue(None)
