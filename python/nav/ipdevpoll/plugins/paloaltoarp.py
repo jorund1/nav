@@ -25,11 +25,11 @@ for example:
 
 """
 
-from collections.abc import Iterable
 import xml.etree.ElementTree as ET
 from typing import Dict
 
 from IPy import IP
+from nav.models.manage import Netbox
 from twisted.internet import defer, reactor, ssl
 from twisted.internet.defer import returnValue
 from twisted.web import client
@@ -38,7 +38,6 @@ from twisted.web.http_headers import Headers
 
 from nav import buildconf
 from nav.ipdevpoll.plugins.arp import Arp
-from nav.models import manage
 
 
 class PaloaltoArp(Arp):
@@ -52,32 +51,35 @@ class PaloaltoArp(Arp):
         """Handle plugin business, return a deferred."""
         self._logger.debug("Collecting IP/MAC mappings for Paloalto device")
 
-        api_profiles = netbox.get_http_rest_management_profiles("Palo Alto ARP")
-        api_keys = [profile.configuration["api_key"] for profile in api_profiles]
-
-        for api_key, i in enumerate(api_keys):
-            mappings = yield self._get_paloalto_arp_mappings(self.netbox.ip, api_key)
-            if mappings is not None:
-                yield self._process_data(mappings)
-                break
-            self._logger.info(
-                "Using API key %d of %d: No mappings found for Paloalto device",
-                i,
-                len(api_keys),
-            )
+        mappings = self._get_paloalto_arp_mappings(self.netbox)
+        yield self._process_data(mappings)
 
         returnValue(None)
 
     @defer.inlineCallbacks
-    def _get_paloalto_arp_mappings(self, address: str, key: str):
-        """Get mappings from Paloalto device"""
+    def _get_paloalto_arp_mappings(self, netbox: Netbox):
+        """
+        Get ARP mappings from Paloalto device represented by netbox.
 
-        arptable = yield self._do_request(address, key)
-        if arptable is None:
-            returnValue(None)
+        A request to the Paloalto device is made for each applicable management profile until a valid response is obtained.
+        A management profile of the netbox is applicable if its protocol is HTTP_REST and its service is "Palo Alto ARP".
+        """
+        api_profiles = netbox.get_http_rest_management_profiles(service="Palo Alto ARP")
+        api_keys = [profile.configuration["api_key"] for profile in api_profiles]
 
-        # process arpdata into an array of mappings
-        mappings = parse_arp(arptable.decode('utf-8'))
+        mappings = None
+        for i, api_key in enumerate(api_keys):
+            arptable = yield self._do_request(netbox.ip, api_key)
+            if arptable is not None:
+                # process arpdata into an array of mappings
+                mappings = parse_arp(arptable.decode('utf-8'))
+                break
+            self._logger.info(
+                "Could not fetch ARP table from Paloalto device When using API key %d of %d",
+                i,
+                len(api_keys),
+            )
+
         returnValue(mappings)
 
     @defer.inlineCallbacks

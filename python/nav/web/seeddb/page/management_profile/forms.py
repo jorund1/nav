@@ -70,7 +70,6 @@ class HttpRestForm(ProtocolSpecificMixIn, forms.ModelForm):
         fields = []
 
     api_key = forms.CharField(
-        widget=forms.Textarea(),
         label="API key",
         help_text="Key/token to authenticate to the service",
         required=True,
