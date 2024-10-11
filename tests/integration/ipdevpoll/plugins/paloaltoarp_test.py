@@ -2,6 +2,7 @@ from unittest.mock import Mock
 
 import pytest
 import pytest_twisted
+from twisted.internet import defer
 
 from django.urls import reverse
 from nav.models.manage import ManagementProfile, Netbox
@@ -37,7 +38,6 @@ def test_netbox_with_paloalto_management_profile_should_get_arp_mappings(
         (IP('192.168.0.3'), '00:00:00:00:00:03'),
     ]
     assert sorted(actual) == sorted(expected)
-
 
 
 mock_data = b'''
@@ -114,10 +114,10 @@ def paloalto_netbox(db, client):
     )
 
     # Manually sending this post request helps reveal regression bugs in case
-    # HTTPRestForm.service.choices keys are altered since the post's then
-    # invalid service field should then cause the form cleaning stage to
-    # fail. Changing the HTTPRestForm.choice map to use enums as keys instead of
-    # strings would enable static analysis to reveal this.
+    # HTTPRestForm.service.choices keys are altered; because the post's thus
+    # invalid service field should then cause the django form cleaning stage to
+    # fail. (Changing the HTTPRestForm.choice map to use enums as keys instead
+    # of strings would enable static analysis to reveal this.)
     client.post(
         management_profile_url,
         follow=True,
@@ -148,8 +148,7 @@ def paloalto_netbox(db, client):
     profile.delete()
 
 
-@pytest.mark.twisted
-@pytest_twisted.inlineCallbacks
+@defer.inlineCallbacks
 def _do_request_mock(address, key, *args, **kwargs):
     if key == "1234":
         pytest_twisted.returnValue(mock_data)
