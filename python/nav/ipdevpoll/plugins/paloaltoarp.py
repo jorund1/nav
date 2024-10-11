@@ -50,25 +50,26 @@ class PaloaltoArp(Arp):
         """Handle plugin business, return a deferred."""
         self._logger.debug("Collecting IP/MAC mappings for Paloalto device")
 
-        mappings = self._get_paloalto_arp_mappings(self.netbox)
+        api_profiles = self.netbox.get_http_rest_management_profiles(service="Palo Alto ARP")
+        api_keys = [profile.configuration["api_key"] for profile in api_profiles]
+
+        mappings = self._get_paloalto_arp_mappings(self.netbox.ip, api_keys)
         yield self._process_data(mappings)
 
         returnValue(None)
 
     @defer.inlineCallbacks
-    def _get_paloalto_arp_mappings(self, netbox: Netbox):
+    def _get_paloalto_arp_mappings(self, ip: IP, api_keys: list[str]):
         """
         Get ARP mappings from Paloalto device represented by netbox.
 
         A request to the Paloalto device is made for each applicable management profile until a valid response is obtained.
         A management profile of the netbox is applicable if its protocol is HTTP_REST and its service is "Palo Alto ARP".
         """
-        api_profiles = netbox.get_http_rest_management_profiles(service="Palo Alto ARP")
-        api_keys = [profile.configuration["api_key"] for profile in api_profiles]
 
         mappings = None
         for i, api_key in enumerate(api_keys):
-            arptable = yield self._do_request(netbox.ip, api_key)
+            arptable = yield self._do_request(ip, api_key)
             if arptable is not None:
                 # process arpdata into an array of mappings
                 mappings = parse_arp(arptable.decode('utf-8'))

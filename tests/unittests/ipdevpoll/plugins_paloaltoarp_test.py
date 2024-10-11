@@ -72,7 +72,7 @@ def test_get_mappings():
             PaloaltoArp, "_do_request", return_value=defer.succeed(mock_data)
         ):
             mappings = yield instance._get_paloalto_arp_mappings(
-                "0.0.0.0", "abcdefghijklmnop"
+                "0.0.0.0", ["abcdefghijklmnop"]
             )
 
             assert mappings == [

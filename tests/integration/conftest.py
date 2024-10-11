@@ -135,7 +135,7 @@ def management_profile():
 
 
 @pytest.fixture()
-def localhost(management_profile):
+def paloalto_netbox(management_profile):
     from nav.models.manage import Netbox, NetboxProfile
 
     box = Netbox(
