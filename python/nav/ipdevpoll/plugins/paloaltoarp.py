@@ -61,10 +61,10 @@ class PaloaltoArp(Arp):
     @defer.inlineCallbacks
     def _get_paloalto_arp_mappings(self, ip: IP, api_keys: list[str]):
         """
-        Get ARP mappings from Paloalto device represented by netbox.
+        Get ARP mappings from Paloalto device
 
-        A request to the Paloalto device is made for each applicable management profile until a valid response is obtained.
-        A management profile of the netbox is applicable if its protocol is HTTP_REST and its service is "Palo Alto ARP".
+        A request to the Paloalto device is made for each api key until a successful response from the device.
+        This means we expect two different but both valid api keys to cause identical responses from the device.
         """
 
         mappings = None
