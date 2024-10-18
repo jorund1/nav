@@ -110,3 +110,26 @@ def test_do_request():
         assert expected_url in args
 
         assert result == "test content"
+
+
+@pytest.mark.twisted
+@pytest_twisted.inlineCallbacks
+def test_should_only_try_keys_until_success_when_multiple_api_keys():
+    plugin = PaloaltoArp(netbox=Mock(), agent=Mock(), containers=Mock())
+    plugin._do_request = Mock()
+    plugin._do_request.call = _do_request_mock
+    actual = yield plugin._get_paloalto_arp_mappings(IP("10.0.0.2"), ["incorrect1", "incorrect2", "correct1", "correct2"])
+    expected = [
+        ('ifindex', IP('192.168.0.1'), '00:00:00:00:00:01'),
+        ('ifindex', IP('192.168.0.2'), '00:00:00:00:00:02'),
+        ('ifindex', IP('192.168.0.3'), '00:00:00:00:00:03'),
+    ]
+    assert sorted(actual) == sorted(expected)
+    assert plugin._do_request.call_count == 3
+
+
+@inlineCallbacks
+def _do_request_mock(address, key, *args, **kwargs):
+    if key == "correct1" or key == "correct2":
+        defer.returnValue(mock_data)
+    defer.returnValue(None)
