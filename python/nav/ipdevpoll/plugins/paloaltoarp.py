@@ -45,7 +45,6 @@ class PaloaltoArp(Arp):
         """Return True if this plugin can handle the given netbox."""
         return netbox.get_http_rest_management_profiles("Palo Alto ARP").exists()
 
-
     @defer.inlineCallbacks
     def handle(self):
         """Handle plugin business, return a deferred."""
@@ -55,7 +54,6 @@ class PaloaltoArp(Arp):
         mappings = self._get_paloalto_arp_mappings(self.netbox.ip, api_keys)
         if mappings is not None:
             yield self._process_data(mappings)
-
 
     @defer.inlineCallbacks
     def _get_paloalto_arp_mappings(self, ip: IP, api_keys: list[str]):
@@ -81,12 +79,10 @@ class PaloaltoArp(Arp):
 
         returnValue(mappings)
 
-
     def _get_paloalto_api_keys(self, netbox: Netbox) -> list[str]:
         api_profiles = netbox.get_http_rest_management_profiles(service="Palo Alto ARP")
         api_keys = [profile.configuration["api_key"] for profile in api_profiles]
         return api_keys
-
 
     @defer.inlineCallbacks
     def _do_request(self, address: IP, key: str):

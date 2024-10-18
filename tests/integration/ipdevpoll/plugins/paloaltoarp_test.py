@@ -13,22 +13,23 @@ from nav.ipdevpoll.plugins import plugin_registry
 from nav.ipdevpoll.storage import ContainerRepository
 from IPy import IP
 
+
 @pytest.mark.twisted
 @pytest_twisted.inlineCallbacks
 def test_netbox_with_paloalto_management_profile_with_valid_api_key_should_get_arp_mappings(
-        paloalto_netbox_1234, monkeypatch
+    paloalto_netbox_1234, monkeypatch
 ):
     assert PaloaltoArp.can_handle(paloalto_netbox_1234)
 
     # Set up a single ipdevpoll job for this netbox:
-    plugin_registry['paloaltoarp'] = PaloaltoArp  # Assure PaloAltoArp is a known ipdevpoll plugin
+    # Assure PaloAltoArp is a known ipdevpoll plugin
+    plugin_registry['paloaltoarp'] = PaloaltoArp
     job = JobHandler('paloaltoarp', paloalto_netbox_1234.pk, plugins=['paloaltoarp'])
-    job._create_agentproxy = Mock()  # Disable implicit SNMP requests done during job.run()
+    # Disable implicit SNMP requests done during job.run()
+    job._create_agentproxy = Mock()
     job._destroy_agentproxy = Mock()
 
-    monkeypatch.setattr(
-        PaloaltoArp, "_do_request", _only_accept_netbox_1234
-    )
+    monkeypatch.setattr(PaloaltoArp, "_do_request", _only_accept_netbox_1234)
 
     assert paloalto_netbox_1234.arp_set.count() == 0
 
@@ -44,19 +45,16 @@ def test_netbox_with_paloalto_management_profile_with_valid_api_key_should_get_a
 
 
 def test_netbox_with_paloalto_management_profile_with_invalid_api_key_should_not_get_arp_mappings(
-        paloalto_netbox_1234, monkeypatch
+    paloalto_netbox_1234, monkeypatch
 ):
     assert PaloaltoArp.can_handle(paloalto_netbox_1234)
 
-    # Set up a single ipdevpoll job for this netbox:
-    plugin_registry['paloaltoarp'] = PaloaltoArp  # Assure PaloAltoArp is a known ipdevpoll plugin
+    plugin_registry['paloaltoarp'] = PaloaltoArp
     job = JobHandler('paloaltoarp', paloalto_netbox_1234.pk, plugins=['paloaltoarp'])
-    job._create_agentproxy = Mock()  # Disable implicit SNMP requests done during job.run()
+    job._create_agentproxy = Mock()
     job._destroy_agentproxy = Mock()
 
-    monkeypatch.setattr(
-        PaloaltoArp, "_do_request", _only_accept_netbox_5678
-    )
+    monkeypatch.setattr(PaloaltoArp, "_do_request", _only_accept_netbox_5678)
 
     assert paloalto_netbox_1234.arp_set.count() == 0
     yield job.run()
@@ -130,7 +128,6 @@ def paloalto_netbox_1234(db, client):
     )
     profile.save()
 
-
     netbox_url = reverse("seeddb-netbox-edit", args=(box.id,))
     management_profile_url = reverse(
         "seeddb-management-profile-edit", args=(profile.id,)
@@ -150,7 +147,7 @@ def paloalto_netbox_1234(db, client):
             "protocol": ManagementProfile.PROTOCOL_HTTP_REST,
             "service": "Palo Alto ARP",
             "api_key": "1234",
-        }
+        },
     )
 
     client.post(
@@ -176,6 +173,7 @@ def _only_accept_netbox_1234(address, key, *args, **kwargs):
     if key == "1234":
         pytest_twisted.returnValue(mock_data)
     pytest_twisted.returnValue(None)
+
 
 @defer.inlineCallbacks
 def _only_accept_netbox_5678(address, key, *args, **kwargs):

@@ -86,7 +86,7 @@ Use keys
 Alternate port
   If access to the switch is not on the default port (22, in the case of the
   JunOS driver), put the alternate port here.
-  
+
 
 .. _`NAPALM`: https://napalm.readthedocs.io/en/latest/
 .. _`NETCONF`: https://en.wikipedia.org/wiki/NETCONF

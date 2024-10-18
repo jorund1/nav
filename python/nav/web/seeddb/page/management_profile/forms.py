@@ -78,9 +78,7 @@ class HttpRestForm(ProtocolSpecificMixIn, forms.ModelForm):
     )
 
     service = forms.ChoiceField(
-        choices=(
-            ("Palo Alto ARP", "Palo Alto ARP"),
-        ),
+        choices=(("Palo Alto ARP", "Palo Alto ARP"),),
         help_text="",
         required=True,
     )

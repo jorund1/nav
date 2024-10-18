@@ -342,9 +342,7 @@ class Netbox(models.Model):
         if profiles:
             return profiles[0]
 
-    def get_http_rest_management_profiles(
-            self, service: str
-    ) -> models.QuerySet:
+    def get_http_rest_management_profiles(self, service: str) -> models.QuerySet:
         protocol = ManagementProfile.PROTOCOL_HTTP_REST
         return self.profiles.filter(
             protocol=protocol, configuration__contains={"service": service}
