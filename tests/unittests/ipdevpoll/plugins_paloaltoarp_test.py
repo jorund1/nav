@@ -1,5 +1,8 @@
 from unittest.mock import patch, Mock
 
+import pytest_twisted
+import pytest
+
 from IPy import IP
 from nav.ipdevpoll.plugins.paloaltoarp import PaloaltoArp, parse_arp
 from twisted.internet import defer
@@ -60,19 +63,19 @@ def test_parse_mappings():
     ]
 
 
-@inlineCallbacks
+@pytest.mark.twisted
+@pytest_twisted.inlineCallbacks
 def test_get_mappings():
     # Mocking the __init__ method
     with patch.object(PaloaltoArp, "__init__", lambda x: None):
-        instance = PaloaltoArp()
-        instance.config = {'paloaltoarp': {'abcdefghijklmnop': '0.0.0.0'}}
+        instance = PaloaltoArp(Mock(), Mock(), Mock())
 
         # Mocking _do_request to return the mock_data when called
         with patch.object(
             PaloaltoArp, "_do_request", return_value=defer.succeed(mock_data)
         ):
             mappings = yield instance._get_paloalto_arp_mappings(
-                "0.0.0.0", "abcdefghijklmnop"
+                IP("0.0.0.0"), ["abcdefghijklmnop"]
             )
 
             assert mappings == [
@@ -82,7 +85,8 @@ def test_get_mappings():
             ]
 
 
-@inlineCallbacks
+@pytest.mark.twisted
+@pytest_twisted.inlineCallbacks
 def test_do_request():
     mock_response = Mock(spec=Response)
     mock_agent = Mock(spec=Agent)
@@ -92,12 +96,10 @@ def test_do_request():
         patch('nav.ipdevpoll.plugins.paloaltoarp.Agent', return_value=mock_agent),
         patch('twisted.web.client.readBody', return_value="test content"),
     ):
-        mock_address = "paloalto.example.org"
+        mock_address = IP("127.0.0.1")
         mock_key = "secret"
 
-        mock_netbox = Mock(sysname=mock_address, ip="127.0.0.1")
-
-        plugin = PaloaltoArp(netbox=mock_netbox, agent=Mock(), containers=Mock())
+        plugin = PaloaltoArp(netbox=Mock(), agent=Mock(), containers=Mock())
         result = yield plugin._do_request(mock_address, mock_key)
 
         expected_url = f"https://{mock_address}/api/?type=op&cmd=<show><arp><entry+name+=+'all'/></arp></show>&key={mock_key}".encode(
