@@ -37,13 +37,15 @@ def test_netbox_with_paloalto_management_profile_with_valid_api_key_should_get_a
 
     actual = [(arp.ip, arp.mac) for arp in paloalto_netbox_1234.arp_set.all()]
     expected = [
-        (IP('192.168.0.1'), '00:00:00:00:00:01'),
-        (IP('192.168.0.2'), '00:00:00:00:00:02'),
-        (IP('192.168.0.3'), '00:00:00:00:00:03'),
+        ('192.168.0.1', '00:00:00:00:00:01'),
+        ('192.168.0.2', '00:00:00:00:00:02'),
+        ('192.168.0.3', '00:00:00:00:00:03'),
     ]
     assert sorted(actual) == sorted(expected)
 
 
+@pytest.mark.twisted
+@pytest_twisted.inlineCallbacks
 def test_netbox_with_paloalto_management_profile_with_invalid_api_key_should_not_get_arp_mappings(
     paloalto_netbox_1234, monkeypatch
 ):
@@ -107,8 +109,8 @@ mock_data = b'''
     '''
 
 
-@pytest.fixture
-def paloalto_netbox_1234(db, client):
+@pytest.fixture(scope="function")
+def paloalto_netbox_1234(client):
     box = Netbox(
         ip='127.0.0.1',
         sysname='localhost.example.org',
@@ -143,13 +145,12 @@ def paloalto_netbox_1234(db, client):
         follow=True,
         data={
             "name": profile.name,
-            "description": profile.description,
+            "description": "",
             "protocol": ManagementProfile.PROTOCOL_HTTP_REST,
             "service": "Palo Alto ARP",
             "api_key": "1234",
         },
     )
-
     client.post(
         netbox_url,
         follow=True,
@@ -161,22 +162,21 @@ def paloalto_netbox_1234(db, client):
             "profiles": [profile.id],
         },
     )
+    profile.refresh_from_db()
+    box.refresh_from_db()
 
     yield box
-    print("teardown test device")
     box.delete()
     profile.delete()
 
 
-@defer.inlineCallbacks
-def _only_accept_netbox_1234(address, key, *args, **kwargs):
+def _only_accept_netbox_1234(self, address, key, *args, **kwargs):
     if key == "1234":
-        pytest_twisted.returnValue(mock_data)
-    pytest_twisted.returnValue(None)
+        return defer.succeed(mock_data)
+    return defer.succeed(None)
 
 
-@defer.inlineCallbacks
-def _only_accept_netbox_5678(address, key, *args, **kwargs):
+def _only_accept_netbox_5678(self, address, key, *args, **kwargs):
     if key == "5678":
-        pytest_twisted.returnValue(mock_data)
-    pytest_twisted.returnValue(None)
+        return defer.succeed(mock_data)
+    return defer.succeed(None)

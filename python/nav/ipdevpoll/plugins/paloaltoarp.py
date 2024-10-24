@@ -28,7 +28,7 @@ for example:
 import xml.etree.ElementTree as ET
 
 from IPy import IP
-from nav.models.manage import Netbox
+from nav.models.manage import Netbox, ManagementProfile, NetboxProfile
 from twisted.internet import defer, reactor, ssl
 from twisted.internet.defer import returnValue
 from twisted.web import client
@@ -43,15 +43,22 @@ class PaloaltoArp(Arp):
     @classmethod
     def can_handle(cls, netbox):
         """Return True if this plugin can handle the given netbox."""
-        return netbox.get_http_rest_management_profiles("Palo Alto ARP").exists()
+        return NetboxProfile.objects.filter(
+            netbox_id=netbox.id,
+            profile__protocol=ManagementProfile.PROTOCOL_HTTP_REST,
+            profile__configuration__contains={"service": "Palo Alto ARP"},
+        ).exists()
+
+    #    return netbox.get_http_rest_management_profiles("Palo Alto ARP").exists() <--- this doesn't work because plugins are supplied shadow classes of database objects; these classes' instances doesn't have the necessary relations nor methods
 
     @defer.inlineCallbacks
     def handle(self):
         """Handle plugin business, return a deferred."""
         self._logger.debug("Collecting IP/MAC mappings for Paloalto device")
 
-        api_keys = self._get_paloalto_api_keys(self.netbox)
-        mappings = self._get_paloalto_arp_mappings(self.netbox.ip, api_keys)
+        configurations = self._get_paloalto_configurations(self.netbox)
+        api_keys = [config["api_key"] for config in configurations]
+        mappings = yield self._get_paloalto_arp_mappings(self.netbox.ip, api_keys)
         if mappings is not None:
             yield self._process_data(mappings)
 
@@ -79,10 +86,13 @@ class PaloaltoArp(Arp):
 
         returnValue(mappings)
 
-    def _get_paloalto_api_keys(self, netbox: Netbox) -> list[str]:
-        api_profiles = netbox.get_http_rest_management_profiles(service="Palo Alto ARP")
-        api_keys = [profile.configuration["api_key"] for profile in api_profiles]
-        return api_keys
+    def _get_paloalto_configurations(self, netbox: Netbox):
+        #        api_profiles = netbox.get_http_rest_management_profiles(service="Palo Alto ARP")
+        return NetboxProfile.objects.filter(
+            netbox_id=netbox.id,
+            profile__protocol=ManagementProfile.PROTOCOL_HTTP_REST,
+            profile__configuration__contains={"service": "Palo Alto ARP"},
+        ).values_list("profile__configuration", flat=True)
 
     @defer.inlineCallbacks
     def _do_request(self, address: IP, key: str):

@@ -115,9 +115,7 @@ def test_do_request():
 @pytest.mark.twisted
 @pytest_twisted.inlineCallbacks
 def test_should_only_try_keys_until_success_when_multiple_api_keys():
-    with patch.object(
-            PaloaltoArp, "_do_request", side_effect=_do_request_mock
-    ):
+    with patch.object(PaloaltoArp, "_do_request", side_effect=_do_request_mock):
         plugin = PaloaltoArp(netbox=Mock(), agent=Mock(), containers=Mock())
         actual = yield plugin._get_paloalto_arp_mappings(
             IP("10.0.0.2"), ["incorrect1", "incorrect2", "correct1", "correct2"]
