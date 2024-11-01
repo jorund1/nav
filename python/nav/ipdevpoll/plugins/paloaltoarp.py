@@ -41,23 +41,19 @@ from nav.ipdevpoll.plugins.arp import Arp
 
 class PaloaltoArp(Arp):
     @classmethod
+    @defer.inlineCallbacks
     def can_handle(cls, netbox):
         """Return True if this plugin can handle the given netbox."""
-        return NetboxProfile.objects.filter(
-            netbox_id=netbox.id,
-            profile__protocol=ManagementProfile.PROTOCOL_HTTP_REST,
-            profile__configuration__contains={"service": "Palo Alto ARP"},
-        ).exists()
-
-    #    return netbox.get_http_rest_management_profiles("Palo Alto ARP").exists() <--- this doesn't work because plugins are supplied shadow classes of database objects; these classes' instances doesn't have the necessary relations nor methods
+        has_configurations = yield run_in_thread(cls._has_paloalto_configurations, netbox)
+        defer.returnValue(has_configurations)
 
     @defer.inlineCallbacks
     def handle(self):
         """Handle plugin business, return a deferred."""
         self._logger.debug("Collecting IP/MAC mappings for Paloalto device")
 
-        configurations = self._get_paloalto_configurations(self.netbox)
-        api_keys = [config["api_key"] for config in configurations]
+        configurations = yield run_in_thread(self._get_paloalto_configurations, self.netbox)
+#        api_keys = [config["api_key"] for config in configurations]
         mappings = yield self._get_paloalto_arp_mappings(self.netbox.ip, api_keys)
         if mappings is not None:
             yield self._process_data(mappings)
@@ -70,24 +66,30 @@ class PaloaltoArp(Arp):
         The Paloalto device is expected to give the same result for two correct but different keys in api_keys.
         Hence, a request to the Paloalto device is made for each api key only until a successful response from the device.
         """
-
         mappings = None
-        for i, api_key in enumerate(api_keys):
-            arptable = yield self._do_request(ip, api_key)
-            if arptable is not None:
-                # process arpdata into an array of mappings
-                mappings = parse_arp(arptable.decode('utf-8'))
-                break
-            self._logger.info(
-                "Could not fetch ARP table from Paloalto device When using API key %d of %d",
-                i,
-                len(api_keys),
-            )
-
+        arptable = yield self._do_request(ip, api_key)
+        if arptable is not None:
+            mappings = parse_arp(arptable.decode('utf-8'))
         returnValue(mappings)
 
-    def _get_paloalto_configurations(self, netbox: Netbox):
-        #        api_profiles = netbox.get_http_rest_management_profiles(service="Palo Alto ARP")
+    @classmethod
+    def _has_paloalto_configurations(cls, netbox: Netbox) -> bool:
+        """
+        Make a blocking database request to check if the netbox has any
+        management profile that configures access to Palo Alto ARP data via HTTP
+        """
+        return NetboxProfile.objects.filter(
+            netbox_id=netbox.id,
+            profile__protocol=ManagementProfile.PROTOCOL_HTTP_REST,
+            profile__configuration__contains={"service": "Palo Alto ARP"},
+        ).exists()
+
+    @classmethod
+    def _get_paloalto_configurations(cls, netbox: Netbox) -> list[dict]:
+        """
+        Make a blocking database request that fetches all management profiles of
+        the netbox that configures access to Palo Alto ARP data via HTTP
+        """
         return NetboxProfile.objects.filter(
             netbox_id=netbox.id,
             profile__protocol=ManagementProfile.PROTOCOL_HTTP_REST,
@@ -96,8 +98,9 @@ class PaloaltoArp(Arp):
 
     @defer.inlineCallbacks
     def _do_request(self, address: IP, key: str):
-        """Make request to Paloalto device"""
-
+        """
+        Make request to Paloalto device
+        """
         class SslPolicy(client.BrowserLikePolicyForHTTPS):
             def creatorForNetloc(self, hostname, port):
                 return ssl.CertificateOptions(verify=False)
