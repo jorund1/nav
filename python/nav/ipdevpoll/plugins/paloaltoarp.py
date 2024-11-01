@@ -15,14 +15,12 @@
 # License along with NAV. If not, see <http://www.gnu.org/licenses/>.
 #
 
-"""ipdevpoll plugin for fetching arp mappings from Palo Alto firewalls
+"""
+ipdevpoll plugin for fetching arp mappings from Palo Alto firewalls
 
-Add [paloaltoarp] section to ipdevpoll.conf
-add hostname = key to [paloaltoarp] section
-for example:
-[paloaltoarp]
-10.0.0.0 = abcdefghijklmnopqrstuvwxyz1234567890
-
+Configure a netbox to work with this plugin by assigning it a
+HTTP_REST_API management profile with service set to "Palo Alto ARP"
+in seedDB.
 """
 
 import xml.etree.ElementTree as ET
@@ -44,62 +42,68 @@ class PaloaltoArp(Arp):
     @defer.inlineCallbacks
     def can_handle(cls, netbox):
         """Return True if this plugin can handle the given netbox."""
-        has_configurations = yield run_in_thread(cls._has_paloalto_configurations, netbox)
-        defer.returnValue(has_configurations)
+        has_configurations = yield cls._has_paloalto_configurations(netbox)
+        returnValue(has_configurations)
 
     @defer.inlineCallbacks
     def handle(self):
         """Handle plugin business, return a deferred."""
         self._logger.debug("Collecting IP/MAC mappings for Paloalto device")
 
-        configurations = yield run_in_thread(self._get_paloalto_configurations, self.netbox)
-#        api_keys = [config["api_key"] for config in configurations]
-        mappings = yield self._get_paloalto_arp_mappings(self.netbox.ip, api_keys)
-        if mappings is not None:
-            yield self._process_data(mappings)
+        configurations = yield self._get_paloalto_configurations(self.netbox)
+        all_mappings = []
+        for configuration in configurations:
+            mappings = yield self._fetch_paloalto_arp_mappings(self.netbox.ip, api_keys)
+            mappings and all_mappings.extend(mappings)
+
+        yield self._process_data(mappings)
 
     @defer.inlineCallbacks
-    def _get_paloalto_arp_mappings(self, ip: IP, api_keys: list[str]):
+    def _fetch_paloalto_arp_mappings(self, ip: IP, api_keys: list[str]):
         """
-        Get ARP mappings from Paloalto device
+        Make a HTTP request to get ARP mappings from Paloalto device
 
         The Paloalto device is expected to give the same result for two correct but different keys in api_keys.
         Hence, a request to the Paloalto device is made for each api key only until a successful response from the device.
         """
-        mappings = None
         arptable = yield self._do_request(ip, api_key)
-        if arptable is not None:
-            mappings = parse_arp(arptable.decode('utf-8'))
+        mappings = parse_arp(arptable) if arptable is not None else None
         returnValue(mappings)
 
     @classmethod
-    def _has_paloalto_configurations(cls, netbox: Netbox) -> bool:
+    @defer.inlineCallbacks
+    def _has_paloalto_configurations(cls, netbox: Netbox):
         """
-        Make a blocking database request to check if the netbox has any
+        Make a database request to check if the netbox has any
         management profile that configures access to Palo Alto ARP data via HTTP
         """
-        return NetboxProfile.objects.filter(
+        query = NetboxProfile.objects.filter(
             netbox_id=netbox.id,
             profile__protocol=ManagementProfile.PROTOCOL_HTTP_REST,
             profile__configuration__contains={"service": "Palo Alto ARP"},
-        ).exists()
+        )
+        response = yield run_in_thread(query.exists)
+        returnValue(response)
 
     @classmethod
-    def _get_paloalto_configurations(cls, netbox: Netbox) -> list[dict]:
+    @defer.inlineCallbacks
+    def _get_paloalto_configurations(cls, netbox: Netbox):
         """
-        Make a blocking database request that fetches all management profiles of
+        Make a database request that fetches all management profiles of
         the netbox that configures access to Palo Alto ARP data via HTTP
         """
-        return NetboxProfile.objects.filter(
+        query = NetboxProfile.objects.filter(
             netbox_id=netbox.id,
             profile__protocol=ManagementProfile.PROTOCOL_HTTP_REST,
             profile__configuration__contains={"service": "Palo Alto ARP"},
         ).values_list("profile__configuration", flat=True)
+        response = yield run_in_thread(list, query)
+        returnValue(response)
 
     @defer.inlineCallbacks
     def _do_request(self, address: IP, key: str):
         """
-        Make request to Paloalto device
+        Make a HTTP request to Paloalto device
         """
         class SslPolicy(client.BrowserLikePolicyForHTTPS):
             def creatorForNetloc(self, hostname, port):
@@ -130,16 +134,15 @@ class PaloaltoArp(Arp):
         returnValue(response)
 
 
-def parse_arp(arp):
+def parse_arp(arpbytes: bytes) -> list[tuple[str, IP, str]]:
     """
     Create mappings from arp table
     xml.etree.ElementTree is considered insecure: https://docs.python.org/3/library/xml.html#xml-vulnerabilities
     However, since we are not parsing untrusted data, this should not be a problem.
     """
-
     arps = []
 
-    root = ET.fromstring(arp)
+    root = ET.fromstring(arpbytes.decode("utf-8"))
     entries = root.find("result").find("entries")
     for entry in entries:
         status = entry.find("status").text
