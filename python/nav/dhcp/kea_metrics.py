@@ -1,6 +1,22 @@
+#
+# Copyright (C) 2024 Sikt
+#
+# This file is part of Network Administration Visualized (NAV).
+#
+# NAV is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License version 3 as published by
+# the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+# details.  You should have received a copy of the GNU General Public License
+# along with NAV. If not, see <http://www.gnu.org/licenses/>.
+#
 """
-Exports the KeaDhcpMetricSource class for fetching DHCP metrics from
-Kea DHCP servers
+This module contains the KeaDhcpMetricSource class, used for fetching DHCP
+metrics from Kea DHCP servers
+
                             |
              Managed by NAV | Managed externally
                             |
@@ -9,18 +25,20 @@ KeaDhcpMetricSource <---------> Kea Control Agent <=====> Kea DHCP4 server/Kea D
                             |
                             |
 """
-from IPy import IP
-from typing import Optional
-from itertools import chain
-from nav.dhcp.generic_metrics import DhcpMetricSource
-from nav.errors import GeneralException
-from nav.dhcp.generic_metrics import DhcpMetric, DhcpMetricKey, DhcpMetricSource
+
 from datetime import datetime
-import logging
-from requests import RequestException, JSONDecodeError
-import requests
-import json
 from enum import IntEnum
+from itertools import chain
+import json
+import logging
+import requests
+from requests import RequestException, JSONDecodeError
+from typing import Optional
+
+from IPy import IP
+
+from nav.dhcp.generic_metrics import DhcpMetric, DhcpMetricKey, DhcpMetricSource
+from nav.errors import GeneralException
 
 _logger = logging.getLogger(__name__)
 
@@ -339,7 +357,6 @@ class KeaConflict(KeaException):
 
 class KeaStatus(IntEnum):
     """Status of a response sent from a Kea Control Agent"""
-
     SUCCESS = 0
     ERROR = 1
     UNSUPPORTED = 2
