@@ -14,6 +14,9 @@ from datetime import timezone
 def test_dhcp6_config_and_statistic_response_that_is_valid_should_return_every_metric(
     valid_dhcp6, responsequeue
 ):
+    """
+    Return 
+    """
     config, statistics, expected_metrics = valid_dhcp6
     responsequeue.autofill("dhcp6", config, statistics)
     source = KeaDhcpMetricSource("192.0.1.2", 80, dhcp_version=6, tzinfo=timezone.utc)
@@ -59,12 +62,23 @@ def test_any_response_with_invalid_format_should_raise_KeaError(
     config, statistics, _ = valid_dhcp4
     source = KeaDhcpMetricSource("192.0.1.2", 80, dhcp_version=4)
 
+    """
+    From the doc:
+    If the requested statistic is not found, the response contains an
+    empty map, i.e. only { } as an argument, but the status code still
+    indicates success (0).
+    """
+    # TODO: This should probably not crash the cronjob but instead yield empty results
+    # https://kea.readthedocs.io/en/kea-2.2.0/arm/stats.html#the-statistic-get-command
+    # That is find out if the return code of {} inidcates COMMAND_NOT_SUPPORTED (fail is correct)
+    # or just merely WE_DONT_HAVE_ANY_VALUES_FOR_THAT_SUPPORTED_COMMAND_RIGHT_NOW (fail is probably incorrect)
     responsequeue.add("config-get", "{}")
     with pytest.raises(KeaException):
         source.fetch_metrics()
 
     responsequeue.clear()
 
+    # TODO: This should probably not crash the cronjob but instead yield empty results
     responsequeue.autofill("dhcp4", config, None)
     responsequeue.add("statistic-get", "{}")
     with pytest.raises(KeaException):
@@ -72,6 +86,7 @@ def test_any_response_with_invalid_format_should_raise_KeaError(
 
     responsequeue.clear()
 
+    # TODO: This should probably not crash the cronjob but instead yield empty results
     responsequeue.autofill("dhcp4", None, statistics)
     responsequeue.add("config-get", "{}")
     with pytest.raises(KeaException):
@@ -528,6 +543,10 @@ def valid_dhcp4():
 
 
 def kearesponse(val, status=KeaStatus.SUCCESS):
+    """
+    Make a Kea API conformant response body whose response value (called
+    response arguments in the specification) is given by the dictionary `val`
+    """
     return f'''
 [
     {{
@@ -545,39 +564,23 @@ def responsequeue(monkeypatch):
     requests.Session.post() and requests.post(). The fixture returns a
     namespace with three functions:
 
-    responsequeue.add() can be used to append text strings or functions that
-    return text strings to a fifo queue of post responses that in fifo order
-    will be returned as proper requests.Response objects on calls to
-    requests.post() and requests.Session().post().
+    responsequeue.add(command, text_or_func) --- appends the text string or
+    function that return a text string to the fifo queue for the given Kea API
+    command string. On any calls to requests.post() or requests.Session().post()
+    in the code under test, any Kea API command in the request body is extracted
+    and the text of the next element in that command's fifo becomes the
+    response. Text strings are popped from the fifo after use, while functions
+    are not. If the fifo was empty, an API conformant "command not supported"
+    response is returned instead.
 
-    responsequeue.remove() removes a specific fifo queue.
+    responsequeue.clear() --- Empty the fifo queues of all commands, removing
+    all previously configured command responses.
 
-    responsequeue.clear() can be used to clear the all fifo queues.
-    """
-    """
-    Any test that include this fixture, will automatically mock
-    `requests.Session.post()` and `requests.post()` (it uses the
-    set_response_handler fixture to set the response handler for
-    these mocked post() functions, so don't set this manually if this
-    fixture is used).
-
-    This fixture returns a namespace with three functions:
-
-    `responsequeue.add(command, text_or_func)`: add `text_or_func` to
-    the queue of text values to be set on the Response objects returned
-    by a post() call for the Kea command `command`. Any queue for a command `command` that is empty (the default) returns a Kea "command not supported" response.
-    if `text_or_func` is a string, it is added to the back of this queue and
-    becomes the text value of the response when it reaches the front of queue Then it gets popped off the queue.
-    if `text_or_func` is a callable, it is
-    added to the back of this queue. When it reaches the front of the queue, it is called
-    with the arguments that is post()'ed along with the Kea command `command`, and the return value becomes the
-    text value of the response. It is never be popped off the queue.
-
-    `responsequeue.clear()`: Empty the queue for all commands.
-
-    `responsequeue.autofill(service, config, statistics)`: fill the queue for the "config-get" and "statistic-get"
-    commands to mimic the response texts actually sent by a Kea Control Agent for a Kea DHCP server named `service` ("dhcp4" for ipv4 DHCP "dhcp6" for ipv6 DHCP)
-    that returns `config` on a "config-get" command and `statistics` on a "statistic-get-all" command.
+    responsequeue.autofill(service, config, statistics) --- fill the queue for
+    the "config-get" and "statistic-get" commands to mimic the response texts
+    actually sent by a Kea Control Agent for a Kea DHCP server named `service`
+    ("dhcp4" for ipv4 DHCP "dhcp6" for ipv6 DHCP) with config `config` and
+    statistics `statistics`.
     """
     # Dictonary of fifo queues, keyed by command name. A queue stored with key K has the textual content of the responses we want to return (in fifo order, one per call) on a call to requests.post with data that represents a Kea Control Agent command K
     command_responses = {}
@@ -603,26 +606,26 @@ def responsequeue(monkeypatch):
             command = data["command"]
         except (JSONDecodeError, KeyError):
             pytest.fail(
-                "All post requests that the Kea Control Agent receives from NAV"
-                "should be a JSON with a 'command' key. Instead, the mocked Kea "
-                f"Control Agent received {data!r}"
+                "All post requests that NAV sends to the Kea Control Agent"
+                "should be a JSON with a 'command' key. Instead, NAV sent "
+                f"\n\n{data!r}\n\n to the test's Kea Control Agent mock"
             )
 
+        response_text = unknown_command_response.format(command)
+        attrs = {}
         fifo = command_responses.get(command, deque())
         if fifo:
-            next_text, attrs = fifo[0]
-            if callable(next_text):
-                arguments = data.get("arguments", {})
-                service = data.get("service", [])
-                next_text = next_text(arguments=arguments, service=service)
+            text_or_func, attrs = fifo[0]
+            if callable(text_or_func):
+                kea_arguments = data.get("arguments", {})
+                kea_service = data.get("service", [])
+                response_text = text_or_func(arguments=kea_arguments, service=kea_service)
             else:
-                next_text = str(next_text)
+                response_text = str(text_or_func)
                 fifo.popleft()
-        else:
-            next_text = unknown_command_response.format(command)
 
         response = requests.Response()
-        response._content = next_text.encode("utf8")
+        response._content = response_text.encode("utf8")
         response.encoding = "utf8"
         response.status_code = 200
         response.reason = "OK"
@@ -639,7 +642,8 @@ def responsequeue(monkeypatch):
     def new_post_method(self, url, *args, **kwargs):
         return new_post_function(url, *args, **kwargs)
 
-    def add_command_response(command_name, text, attrs={}):
+    def add_command_response(command_name, text, attrs=None):
+        attrs = attrs or {}
         command_responses.setdefault(command_name, deque())
         command_responses[command_name].append((text, attrs))
 
@@ -647,8 +651,9 @@ def responsequeue(monkeypatch):
         command_responses.clear()
 
     def autofill_command_responses(
-        expected_service, config=None, statistics=None, attrs={}
+        expected_service, config=None, statistics=None, attrs=None
     ):
+        attrs = attrs or {}
         def config_get_response(arguments, service):
             assert service == [
                 expected_service
