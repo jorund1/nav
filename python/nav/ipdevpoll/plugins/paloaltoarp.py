@@ -19,7 +19,7 @@
 ipdevpoll plugin for fetching arp mappings from Palo Alto firewalls
 
 Configure a netbox to work with this plugin by assigning it a
-HTTP_REST_API management profile with service set to "Palo Alto ARP"
+HTTP_API management profile with service set to "Palo Alto ARP"
 in seedDB.
 """
 
@@ -42,13 +42,7 @@ class PaloaltoArp(Arp):
     @classmethod
     @defer.inlineCallbacks
     def can_handle(cls, netbox):
-        """
-        Return True if this plugin can handle the given netbox.
-
-        A netbox can be handled if there is any HTTP_REST_API management profile
-        associated with the netbox with "service" set to "Palo Alto ARP" in the
-        profile's configuration dict.
-        """
+        """Return True if this plugin can handle the given netbox."""
         has_configurations = yield cls._has_paloalto_configurations(netbox)
         returnValue(has_configurations)
 
@@ -65,17 +59,6 @@ class PaloaltoArp(Arp):
             if mappings:
                 yield self._process_data(mappings)
                 break
-
-    @defer.inlineCallbacks
-    def _get_paloalto_arp_mappings(self, ip: IP, api_key: str):
-        """
-        Make a HTTP request for ARP data from Paloalto device with the given
-        ip-address, using the given api-key. Returns a formatted list of ARP
-        mappings for use in NAV.
-        """
-        arptable = yield self._do_request(ip, api_key)
-        mappings = _parse_arp(arptable) if arptable else []
-        returnValue(mappings)
 
     @staticmethod
     @db.synchronous_db_access
@@ -98,10 +81,19 @@ class PaloaltoArp(Arp):
         return list(queryset)
 
     @defer.inlineCallbacks
+    def _get_paloalto_arp_mappings(self, address: IP, key: str):
+        """
+        Make a HTTP request for ARP data from Paloalto device with the given
+        ip-address, using the given api-key. Returns a formatted list of ARP
+        mappings for use in NAV.
+        """
+        arptable = yield self._do_request(address, key)
+        mappings = _parse_arp(arptable) if arptable else []
+        returnValue(mappings)
+
+    @defer.inlineCallbacks
     def _do_request(self, address: IP, key: str):
-        """
-        Make a HTTP request to Paloalto device
-        """
+        """Make a HTTP request to Paloalto device"""
 
         class SslPolicy(client.BrowserLikePolicyForHTTPS):
             def creatorForNetloc(self, hostname, port):
@@ -134,12 +126,9 @@ class PaloaltoArp(Arp):
 
 def _parse_arp(arpbytes: bytes) -> list[tuple[str, IP, str]]:
     """
-    Create mappings from arp table.
-
-    .. note:: xml.etree.ElementTree is considered insecure:
-              https://docs.python.org/3/library/xml.html#xml-vulnerabilities
-              However, since we are not parsing untrusted data, this should not
-              be a problem.
+    Create mappings from arp table
+    xml.etree.ElementTree is considered insecure: https://docs.python.org/3/library/xml.html#xml-vulnerabilities
+    However, since we are not parsing untrusted data, this should not be a problem.
     """
     arps = []
 
