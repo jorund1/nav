@@ -66,21 +66,20 @@ class PaloaltoArp(Arp):
                 yield self._process_data(mappings)
                 break
 
-    @classmethod
     @defer.inlineCallbacks
-    def _get_paloalto_arp_mappings(cls, ip: IP, api_key: str):
+    def _get_paloalto_arp_mappings(self, ip: IP, api_key: str):
         """
         Make a HTTP request for ARP data from Paloalto device with the given
         ip-address, using the given api-key. Returns a formatted list of ARP
         mappings for use in NAV.
         """
-        arptable = yield cls._do_request(ip, api_key)
+        arptable = yield self._do_request(ip, api_key)
         mappings = _parse_arp(arptable) if arptable else []
         returnValue(mappings)
 
-    @classmethod
+    @staticmethod
     @db.synchronous_db_access
-    def _has_paloalto_configurations(cls, netbox: Netbox):
+    def _has_paloalto_configurations(netbox: Netbox):
         """
         Make a database request to check if the netbox has any management
         profile that configures access to Palo Alto ARP data via HTTP
@@ -88,9 +87,9 @@ class PaloaltoArp(Arp):
         queryset = _paloalto_profile_queryset(netbox)
         return queryset.exists()
 
-    @classmethod
+    @staticmethod
     @db.synchronous_db_access
-    def _get_paloalto_configurations(cls, netbox: Netbox):
+    def _get_paloalto_configurations(netbox: Netbox):
         """
         Make a database request that fetches all management profiles of
         the netbox that configures access to Palo Alto ARP data via HTTP
@@ -98,9 +97,8 @@ class PaloaltoArp(Arp):
         queryset = _paloalto_profile_queryset(netbox)
         return list(queryset)
 
-    @classmethod
     @defer.inlineCallbacks
-    def _do_request(cls, address: IP, key: str):
+    def _do_request(self, address: IP, key: str):
         """
         Make a HTTP request to Paloalto device
         """
@@ -110,7 +108,7 @@ class PaloaltoArp(Arp):
                 return ssl.CertificateOptions(verify=False)
 
         url = f"https://{address}/api/?type=op&cmd=<show><arp><entry+name+=+'all'/></arp></show>&key={key}"
-        cls._logger.debug("making request: %s", url)
+        self._logger.debug("making request: %s", url)
 
         agent = Agent(reactor, contextFactory=SslPolicy())
 
@@ -124,7 +122,7 @@ class PaloaltoArp(Arp):
                 None,
             )
         except Exception:  # noqa
-            cls._logger.exception(
+            self._logger.exception(
                 "Error when talking to PaloAlto API. "
                 "Make sure the device is reachable and the API key is correct."
             )
