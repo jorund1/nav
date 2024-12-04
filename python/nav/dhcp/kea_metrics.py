@@ -26,23 +26,29 @@ KeaDhcpMetricSource <---------> Kea Control Agent <=====> Kea DHCP4 server/Kea D
                             |
 """
 
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, tzinfo
 from enum import IntEnum
 from itertools import chain
 import json
 import logging
-import requests
-from requests import RequestException, JSONDecodeError
 from typing import Optional
 
 from IPy import IP
+import requests
+from requests import RequestException, JSONDecodeError
 
 from nav.dhcp.generic_metrics import DhcpMetric, DhcpMetricKey, DhcpMetricSource
 from nav.errors import GeneralException
 
 _logger = logging.getLogger(__name__)
 
-_SubnetTuple = tuple[int, IP]  # (subnet_id, netprefix)
+
+@dataclass(order=True, frozen=True)
+class Subnet:
+    id: int
+    prefix: IP
+
 
 class KeaDhcpMetricSource(DhcpMetricSource):
     """
@@ -67,7 +73,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         https: bool = True,
         dhcp_version: int = 4,
         timeout: int = 10,
-        tzinfo: datetime.tzinfo = None,
+        tzinfo: Optional[tzinfo] = None,
     ):
         """
         Instantiate a KeaDhcpMetricSource that fetches DHCP metrics
@@ -90,6 +96,10 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         self._dhcp_config: Optional[dict] = None
         self._timeout = timeout
         self._tzinfo = tzinfo or datetime.now().astimezone().tzinfo
+        self._kea_metric_keys = {
+            DhcpMetricKey.TOTAL: "total-addresses",
+            DhcpMetricKey.ASSIGNED: "assigned-addresses",
+        }
 
     def fetch_metrics(self) -> list[DhcpMetric]:
         """
@@ -116,17 +126,27 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         General errors reported by the Kea Control Agent causes a
         KeaError to be raised.
         """
-        metrics = []
+        metrics: list[DhcpMetric] = []
 
         with requests.Session() as session:
             config = self._fetch_config(session)
             subnets = _subnets_of_config(config, self._dhcp_version)
 
             for subnet in subnets:
-                subnet_metrics = self._fetch_subnet_metrics(subnet, session)
-                metrics.extend(subnet_metrics)
+                total_addresses = self._fetch_subnet_metric(
+                    subnet, DhcpMetricKey.TOTAL, session
+                )
+                assigned_addresses = self._fetch_subnet_metric(
+                    subnet, DhcpMetricKey.ASSIGNED, session
+                )
+                if total_addresses is not None:
+                    metrics.append(total_addresses)
+                if assigned_addresses is not None:
+                    metrics.append(assigned_addresses)
 
-            newest_subnets = _subnets_of_config(self._fetch_config(session), self._dhcp_version)
+            newest_subnets = _subnets_of_config(
+                self._fetch_config(session), self._dhcp_version
+            )
             if sorted(subnets) != sorted(newest_subnets):
                 _logger.warning(
                     "Subnet configuration was modified during DHCP metric fetching, "
@@ -135,39 +155,47 @@ class KeaDhcpMetricSource(DhcpMetricSource):
 
         return metrics
 
+    def _fetch_subnet_metric(
+        self, subnet: Subnet, metric_key: DhcpMetricKey, session: requests.Session
+    ) -> Optional[DhcpMetric]:
+        """
+        Return the most recent metric recorded by the Kea DHCP server for the
+        given subnet with the given metric_key
+        """
+        kea_metric_name = self._get_kea_metric_name(subnet, metric_key)
+        try:
+            response = self._send_query(session, "statistic-get", name=kea_metric_name)
+        except KeaEmpty:
+            # This may occur if the subnet we query have been removed from the
+            # DHCP server's configuration at time of request
+            response = {}
 
-    def _fetch_subnet_metrics(
-            self, subnet: _SubnetTuple, session: requests.Session
-    ) -> list[DhcpMetric]:
-        metric_keys = (
-            ("total-addresses", DhcpMetricKey.TOTAL),
-            ("assigned-addresses", DhcpMetricKey.ASSIGNED),
+        kea_metric_samples = response.get("arguments", {}).get(kea_metric_name, [])
+
+        if len(kea_metric_samples) == 0:
+            _logger.info(
+                "No samples found for metric '%s' in subnet '%s'",
+                metric_key,
+                subnet.prefix,
+            )
+            return None
+
+        # The Kea server may be configured to keep track of the N most recent
+        # metric samples for some N>1, but we only care about the most recent
+        # one. The Kea 2.6 Management API documentation does not specify any
+        # explicit ordering of the returned samples, but ISC's official Kea
+        # Management API consumer, Stork, relies on the fact that the first
+        # sample in the returned list is the most recent[0], so for simplicity's
+        # sake so will we.
+        #
+        # [0]: https://gitlab.isc.org/isc-projects/stork/-/blob/4193375c01e3ec0b3d862166e2329d76e686d16d/backend/server/apps/kea/rps.go#L223-227
+        value, timestring = kea_metric_samples[0]
+        return DhcpMetric(
+            self._parsetime(timestring),
+            subnet.prefix,
+            metric_key,
+            value,  # TODO: self._parsetime(timestring) should be replaced with datetime.now(), but we should have a logging event in case self._parsetime(timestring) - datetime.now() > 6hrs, to inform that data from the server hasn't changed in over 6 hours
         )
-        metrics = []
-
-        for kea_key, nav_key in metric_keys:
-            kea_name = f"subnet[{subnet_id}].{kea_key}"
-            try:
-                response = self._send_query(session, "statistic-get", name=kea_name)
-            except KeaEmpty:
-                continue
-            timeseries = response.get("arguments", {}).get(kea_name, [])
-            if len(timeseries) == 0:
-                _logger.warning(
-                    "Could not fetch metric '%r' for subnet '%s' from Kea: '%s' from Kea "
-                    "is an empty list.",
-                    nav_key,
-                    netprefix,
-                    kea_name,
-                )
-            for value, timestring in timeseries:
-                metric = DhcpMetric(
-                    self._parsetime(timestring), netprefix, nav_key, value
-                )
-                metrics.append(metric)
-
-        return metrics
-
 
     def _fetch_config(self, session: requests.Session) -> dict:
         """
@@ -184,10 +212,9 @@ class KeaDhcpMetricSource(DhcpMetricSource):
                 self._dhcp_config = response["arguments"][f"Dhcp{self._dhcp_version}"]
             except KeyError as err:
                 raise KeaException(
-                    "Unrecognizable response to the 'config-get' request",
-                    {"Response": response},
+                    "Unrecognizable response to a 'config-get' request"
                 ) from err
-        return self._dhcp_config
+        return self._dhcp_config or {}
 
     def _fetch_config_hash(self, session: requests.Session) -> Optional[str]:
         """
@@ -220,13 +247,12 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         the server-end causes a descriptive subclass of KeaException
         to be raised.
         """
-        request_summary = {
-            "Description": f"Sending request to Kea Control Agent at {self._rest_uri}",
-            "Status": "sending",
+        log_summary = {
+            "Request status": "Sending request to Kea Control Agent",
             "Location": self._rest_uri,
             "Command": command,
         }
-        _logger.debug(request_summary)
+        _logger.debug(log_summary)
 
         post_data = json.dumps(
             {
@@ -235,7 +261,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
                 "service": [f"dhcp{self._dhcp_version}"],
             }
         )
-        request_summary["Validity"] = "Invalid Kea response"
+
         try:
             responses = session.post(
                 self._rest_uri,
@@ -243,65 +269,89 @@ class KeaDhcpMetricSource(DhcpMetricSource):
                 timeout=self._timeout,
                 headers={"Content-Type": "application/json"},
             )
-            request_summary["Status"] = "complete"
-            request_summary["HTTP Status"] = responses.status_code
+            log_summary["Request status"] = "Received response from Kea Control Agent"
+            log_summary["Response status"] = (
+                f"HTTP {responses.status_code}: {responses.reason}"
+            )
             responses.raise_for_status()
             responses = responses.json()
         except JSONDecodeError as err:
             raise KeaException(
                 "Server does not look like a Kea Control Agent; "
-                "expected response content to be JSON",
-                request_summary,
+                "response was not valid JSON",
+                log_summary,
             ) from err
         except RequestException as err:
             raise KeaException(
-                "HTTP-related error during request to server", request_summary
+                "HTTP-related error during request to server", log_summary
             ) from err
 
-        if not isinstance(responses, list):
-            # See https://kea.readthedocs.io/en/kea-2.6.0/arm/ctrl-channel.html#control-agent-command-response-format
-            raise KeaException(
-                "Invalid response; server has likely rejected a query", request_summary
-            )
-        if not (len(responses) == 1 and "result" in responses[0]):
-            # `post-data` queries *one* service. Thus `responses` should contain *one* response.
+        # Any valid response from Kea is a JSON list with one entry corresponding to the
+        # response from either the dhcp4 or dhcp6 service we queried
+        if not (
+            isinstance(responses, list)
+            and len(responses) == 1
+            and isinstance(responses[0], dict)
+            and "result" in responses[0]
+        ):
+            if (
+                isinstance(responses, dict)
+                and "result" in responses
+                and "text" in responses
+            ):
+                # If the response is a JSON object it's a specific error message
+                # See https://kea.readthedocs.io/en/kea-2.6.0/arm/ctrl-channel.html#control-agent-command-response-format
+                log_summary["Response"] = f"{responses['result']}: {responses['text']}"
+                raise KeaException(
+                    "Likely authentication or authorization error", log_summary
+                )
             raise KeaException(
                 "Server does not look like a Kea Control Agent; "
-                "expected response content to be a JSON list "
-                "of a single object that has 'result' as one of its keys. ",
-                request_summary,
+                "response JSON structured in an unknown way",
+                log_summary,
             )
-        request_summary["Validity"] = "Valid Kea response"
-
-        _logger.debug(request_summary)
 
         response = responses[0]
         status = response["result"]
+        description = response.get("text", "(no description)")
+
+        log_summary["Response"] = f"Kea status {status}: {description}"
+        _logger.debug(log_summary)
 
         if status == KeaStatus.SUCCESS:
             return response
         elif status == KeaStatus.UNSUPPORTED:
-            raise KeaUnsupported(details=request_summary)
+            raise KeaUnsupported(details=log_summary)
         elif status == KeaStatus.EMPTY:
-            raise KeaEmpty(details=request_summary)
+            raise KeaEmpty(details=log_summary)
         elif status == KeaStatus.ERROR:
-            raise KeaError(details=request_summary)
+            raise KeaError(details=log_summary)
         elif status == KeaStatus.CONFLICT:
-            raise KeaConflict(details=request_summary)
-        raise KeaException("Kea returned an unkown status response", request_summary)
+            raise KeaConflict(details=log_summary)
+        raise KeaException("Kea returned an unkown status response", log_summary)
+
+    def _get_kea_metric_name(self, subnet: Subnet, metric_key: DhcpMetricKey) -> str:
+        """
+        Returns the argument recognized by Kea to query the metric with the
+        given metric_key for the given subnet
+        """
+        kea_metric_key = self._kea_metric_keys[metric_key]
+        return f"subnet[{subnet.id}].{kea_metric_key}"
 
     def _parsetime(self, timestamp: str) -> float:
         """Parse the timestamp string used in Kea's timeseries into unix time"""
         fmt = "%Y-%m-%d %H:%M:%S.%f"
-        return datetime.strptime(timestamp, fmt).replace(tzinfo=self._tzinfo).timestamp()
+        return (
+            datetime.strptime(timestamp, fmt).replace(tzinfo=self._tzinfo).timestamp()
+        )
 
 
-def _subnets_of_config(config: dict, ip_version: int) -> list[_SubnetTuple]:
+def _subnets_of_config(config: dict, ip_version: int) -> list[Subnet]:
     """
     Returns a list containing one (subnet-id, subnet-prefix) tuple per
     subnet listed in the Kea DHCP configuration `config`.
     """
-    subnets = []
+    subnets: list[Subnet] = []
     subnetkey = f"subnet{ip_version}"
     for subnet in chain.from_iterable(
         [config.get(subnetkey, [])]
@@ -310,25 +360,27 @@ def _subnets_of_config(config: dict, ip_version: int) -> list[_SubnetTuple]:
         subnet_id = subnet.get("id", None)
         netprefix = subnet.get("subnet", None)
         if subnet_id is None or netprefix is None:
-            _logger.warning(
-                "id or prefix missing from a subnet's configuration: %r", subnet
-            )
+            _logger.warning("id and/or prefix missing from a subnet's configuration")
             continue
-        subnets.append((subnet_id, IP(netprefix)))
+        subnets.append(Subnet(subnet_id, IP(netprefix)))
     return subnets
 
 
 class KeaException(GeneralException):
     """Error related to interaction with a Kea Control Agent"""
 
-    def __init__(self, message: str = "", details: dict[str, str] = {}):
+    def __init__(
+        self, message: Optional[str] = None, details: Optional[dict[str, str]] = None
+    ):
         self.message = message
         self.details = details
 
     def __str__(self) -> str:
-        doc = self.__doc__
+        doc = ""
         message = ""
         details = ""
+        if self.__doc__:
+            doc = self.__doc__
         if self.message:
             message = f": {self.message}"
         if self.details:
@@ -357,6 +409,7 @@ class KeaConflict(KeaException):
 
 class KeaStatus(IntEnum):
     """Status of a response sent from a Kea Control Agent"""
+
     SUCCESS = 0
     ERROR = 1
     UNSUPPORTED = 2
