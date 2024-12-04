@@ -15,12 +15,7 @@
 #
 
 
-
-
-#TODO: rename from DhcpMetricSource to DhcpCollector
-
-
-
+# TODO: rename from DhcpMetricSource to DhcpCollector
 
 
 """
@@ -48,16 +43,15 @@ from nav.metrics import carbon, CONFIG
 from nav.metrics.templates import metric_path_for_subnet_dhcp
 
 
-
 class DhcpMetricKey(Enum):
     """
     Specifies what kind of value a DHCP metric represents.
 
     TOTAL:     value is the maximum possible amount of active leases in the
                subnet
-    
+
     ASSIGNED:  value is the current amount of active leases in the subnet
-    
+
     DECLINED:  value is the amount of DHCP-maintained addresses in use by an
                entity unknown to the server and thus not available for
                assignment. (Should ideally always be zero)
@@ -65,6 +59,7 @@ class DhcpMetricKey(Enum):
     For more detailed info on DECLINED, see e.g.
     https://kea.readthedocs.io/en/kea-2.2.0/arm/dhcp6-srv.html#duplicate-addresses-dhcpdecline-support
     """
+
     TOTAL = "total"
     ASSIGNED = "assigned"
     DECLINED = "declined"
@@ -75,7 +70,7 @@ class DhcpMetricKey(Enum):
 
 @dataclass(frozen=True)
 class DhcpMetric:
-    timestamp: datetime
+    timestamp: float
     subnet_prefix: IP
     key: DhcpMetricKey
     value: int
@@ -88,16 +83,14 @@ class DhcpMetricSource:
     graphite server. Subclasses need to implement `fetch_metrics`.
     """
 
-    def fetch_metrics(self) -> Iterator[DhcpMetric]:
+    def fetch_metrics(self) -> list[DhcpMetric]:
         """
         Fetch DhcpMetrics having keys `TOTAL` and `ASSIGNED` for each subnet of the
         DHCP server at current point of time.
         """
         raise NotImplementedError
 
-    def fetch_metrics_to_graphite(
-        self, host=None, port=None
-    ):
+    def fetch_metrics_to_graphite(self, host=None, port=None):
         """
         Fetch metrics describing total amount of addresses
         (DhcpMetricKey.TOTAL) and amount of addresses that have been
