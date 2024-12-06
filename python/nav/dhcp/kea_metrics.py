@@ -32,7 +32,7 @@ from enum import IntEnum
 from itertools import chain
 import json
 import logging
-from typing import Optional
+from typing import Optional, Union
 
 from IPy import IP
 import requests
@@ -68,7 +68,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
 
     def __init__(
         self,
-        address: str,
+        address: Union[str, IP],
         port: int,
         https: bool = True,
         dhcp_version: int = 4,
@@ -90,16 +90,19 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         :param tzinfo:       the timezone of the Kea Control Agent.
         """
         super()
-        scheme = "https" if https else "http"
-        self._rest_uri = f"{scheme}://{address}:{port}/"
+        self._rest_uri = _make_uri(address, port, https)
         self._dhcp_version = dhcp_version
         self._dhcp_config: Optional[dict] = None
         self._timeout = timeout
         self._tzinfo = tzinfo or datetime.now().astimezone().tzinfo
-        self._kea_metric_keys = {
-            DhcpMetricKey.TOTAL: "total-addresses",
-            DhcpMetricKey.ASSIGNED: "assigned-addresses",
-        }
+
+        if dhcp_version == 4:
+            self._kea_metric_keys = {
+                DhcpMetricKey.TOTAL: "total-addresses",
+                DhcpMetricKey.ASSIGNED: "assigned-addresses",
+            }
+        else:
+            raise ValueError(f"Only DHCPv{dhcp_version} is supported")
 
     def fetch_metrics(self) -> list[DhcpMetric]:
         """
@@ -364,6 +367,15 @@ def _subnets_of_config(config: dict, ip_version: int) -> list[Subnet]:
             continue
         subnets.append(Subnet(subnet_id, IP(netprefix)))
     return subnets
+
+
+def _make_uri(address: Union[IP, str], port: int, https: bool) -> str:
+    address = IP(address).strNormal(wantprefixlen=False)
+    scheme = "https" if https else "http"
+    if address.version() == 4:
+        return f"{scheme}://{address}:{port}/"
+    elif address.version() == 6:
+        return f"{scheme}://[{address}]:{port}/"
 
 
 class KeaException(GeneralException):
