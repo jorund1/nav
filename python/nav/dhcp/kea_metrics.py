@@ -92,7 +92,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         self._dhcp_version = dhcp_version
         self._dhcp_config: Optional[dict] = None
         self._timeout = timeout
-        self._tzinfo = tzinfo or datetime.now().astimezone().tzinfo
+        self._access_time = datetime.now().timestamp()
 
         if dhcp_version == 4:
             self._kea_metric_keys = {
@@ -127,6 +127,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         General errors reported by the Kea Control Agent causes a
         KeaError to be raised.
         """
+        self._access_time = datetime.now().timestamp()
         metrics: list[DhcpMetric] = []
 
         with requests.Session() as session:
@@ -192,10 +193,10 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         # [0]: https://gitlab.isc.org/isc-projects/stork/-/blob/4193375c01e3ec0b3d862166e2329d76e686d16d/backend/server/apps/kea/rps.go#L223-227
         value, timestring = kea_metric_samples[0]
         return DhcpMetric(
-            self._parsetime(timestring),
+            self._access_time,
             subnet.prefix,
             metric_key,
-            value,  # TODO: self._parsetime(timestring) should be replaced with datetime.now(), but we should have a logging event in case self._parsetime(timestring) - datetime.now() > 6hrs, to inform that data from the server hasn't changed in over 6 hours
+            value,
         )
 
     def _fetch_config(self, session: requests.Session) -> dict:
@@ -338,13 +339,6 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         """
         kea_metric_key = self._kea_metric_keys[metric_key]
         return f"subnet[{subnet.id}].{kea_metric_key}"
-
-    def _parsetime(self, timestamp: str) -> float:
-        """Parse the timestamp string used in Kea's timeseries into unix time"""
-        fmt = "%Y-%m-%d %H:%M:%S.%f"
-        return (
-            datetime.strptime(timestamp, fmt).replace(tzinfo=self._tzinfo).timestamp()
-        )
 
 
 def _subnets_of_config(config: dict, ip_version: int) -> list[Subnet]:
