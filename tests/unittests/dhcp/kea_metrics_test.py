@@ -5,93 +5,33 @@ import pytest
 import requests
 from IPy import IP
 import json
-import logging
-import re
-from requests.exceptions import JSONDecodeError, HTTPError, Timeout
-from datetime import timezone
+from requests.exceptions import JSONDecodeError
+from typing import Union, Callable
 
 
-def test_dhcp4_config_and_statistic_response_that_is_valid_should_return_every_metric(
+def test_fetch_metrics_should_return_most_rececent_metric_in_statistic_responses_from_api(
     valid_dhcp4, responsequeue
 ):
+    """
+    For each metric type, the API returns a response where the "arguments"
+    dictionary contains either
+    (i)  a list of metrics where the most recent metric is the first item (the
+         usual case), or
+    (ii) nothing (the unusual case where the requested statistic is not found)
+    https://kea.readthedocs.io/en/kea-2.2.0/arm/stats.html#the-statistic-get-command
+
+    This test checks that fetch_metrics() returns the most recent metric (the
+    first in the list) for each metric type.
+    """
     config, statistics, expected_metrics = valid_dhcp4
-    responsequeue.autofill("dhcp4", config, statistics)
-    source = KeaDhcpMetricSource("192.0.1.2", 80, dhcp_version=4, tzinfo=timezone.utc)
-    assert set(source.fetch_metrics()) == set(expected_metrics)
+    responsequeue.autofill("dhcp4", config=config, statistics=statistics)
+    source = KeaDhcpMetricSource("http://example.org/")
+    assert set(source.fetch_metrics()) == set(
+        expected_metrics
+    )  # TODO: Timestamps need not be exactly the same
 
 
-@pytest.mark.parametrize(
-    "status", [status for status in KeaStatus if status != KeaStatus.SUCCESS]
-)
-def test_config_response_with_error_status_should_raise_KeaError(
-    valid_dhcp4, responsequeue, status
-):
-    """
-    If Kea responds with an error while fetching the Kea DHCP's config during
-    fetch_metrics(), we cannot continue further, so we fail.
-    """
-    config, statistics, _ = valid_dhcp4
-    responsequeue.autofill("dhcp4", None, statistics)
-    responsequeue.add("config-get", kearesponse(config, status=status))
-    source = KeaDhcpMetricSource("192.0.1.2", 80, dhcp_version=4)
-    with pytest.raises(KeaException):
-        source.fetch_metrics()
-
-
-def test_any_response_with_invalid_format_should_raise_KeaError(
-    valid_dhcp4, responsequeue
-):
-    """
-    If Kea responds with an invalid format (i.e. in an unrecognizable way), we
-    should fail loudly, because chances are either the host we're sending
-    requests to is not a Kea Control Agent, or there's a part of the API that
-    we've not covered.
-    """
-    config, statistics, _ = valid_dhcp4
-    source = KeaDhcpMetricSource("192.0.1.2", 80, dhcp_version=4)
-
-    """
-    From the doc:
-    If the requested statistic is not found, the response contains an
-    empty map, i.e. only { } as an argument, but the status code still
-    indicates success (0).
-    """
-    # TODO: This should probably not crash the cronjob but instead yield empty results
-    # https://kea.readthedocs.io/en/kea-2.2.0/arm/stats.html#the-statistic-get-command
-    # That is find out if the return code of {} inidcates COMMAND_NOT_SUPPORTED (fail is correct)
-    # or just merely WE_DONT_HAVE_ANY_VALUES_FOR_THAT_SUPPORTED_COMMAND_RIGHT_NOW (fail is probably incorrect)
-    responsequeue.add("config-get", "{}")
-    with pytest.raises(KeaException):
-        source.fetch_metrics()
-
-    responsequeue.clear()
-
-    # TODO: This should probably not crash the cronjob but instead yield empty results
-    responsequeue.autofill("dhcp4", config, None)
-    responsequeue.add("statistic-get", "{}")
-    with pytest.raises(KeaException):
-        source.fetch_metrics()
-
-    responsequeue.clear()
-
-    # TODO: This should probably not crash the cronjob but instead yield empty results
-    responsequeue.autofill("dhcp4", None, statistics)
-    responsequeue.add("config-get", "{}")
-    with pytest.raises(KeaException):
-        source.fetch_metrics()
-
-    responsequeue.clear()
-
-    # config-hash-get is only called if some config-get includes a hash we can compare
-    # with the next time we're attempting to fetch a config:
-    config["Dhcp4"]["hash"] = "foo"
-    responsequeue.autofill("dhcp4", config, statistics)
-    responsequeue.add("config-hash-get", "{}")
-    with pytest.raises(KeaException):
-        source.fetch_metrics()
-
-
-def test_all_responses_is_empty_but_valid_should_yield_no_metrics(
+def test_fetch_metrics_should_gracefully_handle_empty_arguments_in_responses_from_api(
     valid_dhcp4, responsequeue
 ):
     """
@@ -102,14 +42,14 @@ def test_all_responses_is_empty_but_valid_should_yield_no_metrics(
     correct thing to do is to return an empty iterable.
     """
     config, statistics, _ = valid_dhcp4
-    responsequeue.autofill("dhcp4", None, statistics)
+    responsequeue.autofill("dhcp4", config=None, statistics=statistics)
     responsequeue.add("config-get", lambda **_: kearesponse({"Dhcp4": {}}))
-    source = KeaDhcpMetricSource("192.0.1.2", 80, dhcp_version=4, tzinfo=timezone.utc)
+    source = KeaDhcpMetricSource("http://example.org/")
     assert list(source.fetch_metrics()) == []
 
     responsequeue.clear()
 
-    responsequeue.autofill("dhcp4", config, None)
+    responsequeue.autofill("dhcp4", config=config, statistics=None)
     responsequeue.add(
         "statistic-get", lambda arguments, **_: kearesponse({arguments["name"]: []})
     )
@@ -117,21 +57,126 @@ def test_all_responses_is_empty_but_valid_should_yield_no_metrics(
 
     responsequeue.clear()
 
-    responsequeue.autofill("dhcp4", config, None)
+    # From the doc:
+    # The server returns details of the requested statistic, with a result of 0
+    # indicating success and the specified statistic as the value of the arguments
+    # parameter. If the requested statistic is not found, the response contains an
+    # empty map, i.e. only { } as an argument, but the status code still indicates
+    # success (0).
+    # https://kea.readthedocs.io/en/kea-2.2.0/arm/stats.html#the-statistic-get-command
+    responsequeue.autofill("dhcp4", config=config, statistics=None)
     responsequeue.add("statistic-get", lambda **_: kearesponse({}))
     assert list(source.fetch_metrics()) == []
 
 
-def test_response_with_http_error_status_code_should_cause_KeaException_to_be_raised(
+def test_fetch_metrics_should_raise_an_exception_on_http_error_response_from_api(
     valid_dhcp4, responsequeue
 ):
     config, statistics, _ = valid_dhcp4
-    responsequeue.autofill("dhcp4", config, statistics, attrs={"status_code": 403})
+    responsequeue.autofill(
+        "dhcp4",
+        config=config,
+        statistic=statistics,
+        attrs={"status_code": 403},
+    )
 
-    source = KeaDhcpMetricSource("192.0.1.2", 80, dhcp_version=4, tzinfo=timezone.utc)
+    source = KeaDhcpMetricSource("http://example.org/")
 
     with pytest.raises(KeaException):
         source.fetch_metrics()
+
+
+@pytest.mark.parametrize(
+    "status", [status for status in KeaStatus if status != KeaStatus.SUCCESS]
+)
+def test_fetch_metrics_should_raise_an_exception_on_error_status_in_config_response_from_api(
+    valid_dhcp4, responsequeue, status
+):
+    config, statistics, _ = valid_dhcp4
+    responsequeue.autofill("dhcp4", config=None, statistics=statistics)
+    responsequeue.add("config-get", kearesponse(config, status=status))
+    source = KeaDhcpMetricSource("http://example.org/")
+    with pytest.raises(KeaException):
+        source.fetch_metrics()
+
+
+@pytest.mark.parametrize(
+    "status", [status for status in KeaStatus if status != KeaStatus.SUCCESS]
+)
+def test_fetch_metrics_should_raise_an_exception_on_error_status_in_statistic_response_from_api(
+    valid_dhcp4, responsequeue, status
+):
+    config, statistics, _ = valid_dhcp4
+    responsequeue.autofill("dhcp4", config=config, statistics=None)
+    responsequeue.add("statistic-get", kearesponse(statistics, status=status))
+    source = KeaDhcpMetricSource("http://example.org/")
+    with pytest.raises(KeaException):
+        source.fetch_metrics()
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        status
+        for status in KeaStatus
+        if status not in (KeaStatus.SUCCESS, KeaStatus.UNSUPPORTED)
+    ],
+)
+def test_fetch_metrics_should_raise_an_exception_on_error_status_in_config_hash_response_from_api(
+    valid_dhcp4, responsequeue, status
+):
+    foohash = "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"
+    config, statistics, _ = valid_dhcp4
+    source = KeaDhcpMetricSource("http://example.org/")
+    config["Dhcp4"]["hash"] = foohash
+    responsequeue.autofill("dhcp4", config=config, statistics=statistics)
+    responsequeue.add("config-hash-get", kearesponse({"hash": foohash}, status=status))
+    with pytest.raises(KeaException):
+        source.fetch_metrics()
+
+
+class TestUnrecognizableResponses:
+    """
+    If Kea responds in an unrecognizable way, we should always fail loudly,
+    because chances are either the host we're sending requests to is not a Kea
+    Control Agent, or there's a part of the API that we've not covered
+    correctly.
+    """
+
+    invalid_response = "{}"
+
+    def test_fetch_metrics_should_raise_an_exception_on_unrecognizable_config_response_from_api(
+        self, valid_dhcp4, responsequeue
+    ):
+        config, statistics, _ = valid_dhcp4
+        source = KeaDhcpMetricSource("http://example.org/")
+
+        responsequeue.autofill("dhcp4", config=None, statistics=statistics)
+        responsequeue.add("config-get", self.invalid_response)
+        with pytest.raises(KeaException):
+            source.fetch_metrics()
+
+    def test_fetch_metrics_should_raise_an_exception_on_unrecognizable_statistic_response_from_api(
+        self, valid_dhcp4, responsequeue
+    ):
+        config, statistics, _ = valid_dhcp4
+        source = KeaDhcpMetricSource("http://example.org/")
+
+        responsequeue.autofill("dhcp4", config=config, statistics=None)
+        responsequeue.add("statistic-get", self.invalid_response)
+        with pytest.raises(KeaException):
+            source.fetch_metrics()
+
+    def test_fetch_metrics_should_raise_an_exception_on_unrecognizable_config_hash_response_from_api(
+        self, valid_dhcp4, responsequeue
+    ):
+        config, statistics, _ = valid_dhcp4
+        source = KeaDhcpMetricSource("http://example.org/")
+        config["Dhcp4"]["hash"] = "foo"
+        responsequeue.autofill("dhcp4", config=config, statistics=statistics)
+        responsequeue.add("config-hash-get", self.invalid_response)
+        with pytest.raises(KeaException):
+            source.fetch_metrics()
 
 
 @pytest.fixture
@@ -226,103 +271,61 @@ def valid_dhcp4():
 
     expected_metrics = [
         DhcpMetric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140438+00:00"),
+            datetime.fromisoformat("2024-07-22T09:06:58.140438+00:00").timestamp(),
             IP("192.0.1.0/24"),
             DhcpMetricKey.ASSIGNED,
             1,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-05T20:44:54.230608+00:00"),
-            IP("192.0.1.0/24"),
-            DhcpMetricKey.ASSIGNED,
-            0,
-        ),
-        DhcpMetric(
-            datetime.fromisoformat("2024-07-05T09:15:05.626594+00:00"),
-            IP("192.0.1.0/24"),
-            DhcpMetricKey.ASSIGNED,
-            1,
-        ),
-        DhcpMetric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401058+00:00"),
+            datetime.fromisoformat("2024-07-03T16:13:59.401058+00:00").timestamp(),
             IP("192.0.1.0/24"),
             DhcpMetricKey.TOTAL,
             239,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00"),
+            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             IP("192.0.2.0/24"),
             DhcpMetricKey.ASSIGNED,
             1,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-05T20:44:54.230609+00:00"),
-            IP("192.0.2.0/24"),
-            DhcpMetricKey.ASSIGNED,
-            1,
-        ),
-        DhcpMetric(
-            datetime.fromisoformat("2024-07-05T09:15:05.626595+00:00"),
-            IP("192.0.2.0/24"),
-            DhcpMetricKey.ASSIGNED,
-            2,
-        ),
-        DhcpMetric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00"),
+            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
             IP("192.0.2.0/24"),
             DhcpMetricKey.TOTAL,
             240,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00"),
+            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             IP("192.0.3.0/24"),
             DhcpMetricKey.ASSIGNED,
             4,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-05T20:44:54.230609+00:00"),
-            IP("192.0.3.0/24"),
-            DhcpMetricKey.ASSIGNED,
-            5,
-        ),
-        DhcpMetric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00"),
+            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
             IP("192.0.3.0/24"),
             DhcpMetricKey.TOTAL,
             241,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00"),
+            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             IP("192.0.4.0/24"),
             DhcpMetricKey.ASSIGNED,
             1,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-05T20:44:54.230609+00:00"),
-            IP("192.0.4.0/24"),
-            DhcpMetricKey.ASSIGNED,
-            1,
-        ),
-        DhcpMetric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00"),
+            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
             IP("192.0.4.0/24"),
             DhcpMetricKey.TOTAL,
             242,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00"),
+            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             IP("192.0.5.0/24"),
             DhcpMetricKey.ASSIGNED,
             1,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-05T20:44:54.230609+00:00"),
-            IP("192.0.5.0/24"),
-            DhcpMetricKey.ASSIGNED,
-            1,
-        ),
-        DhcpMetric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00"),
+            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
             IP("192.0.5.0/24"),
             DhcpMetricKey.TOTAL,
             243,
@@ -347,24 +350,27 @@ def kearesponse(val, status=KeaStatus.SUCCESS):
     '''
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def responsequeue(monkeypatch):
     """
     Any test that include this fixture, will automatically mock
     requests.Session.post() and requests.post(). The fixture returns a
     namespace with three functions:
 
-    responsequeue.add(command, text_or_func) --- appends the text string or
-    function that return a text string to the fifo queue for the given Kea API
-    command string. On any calls to requests.post() or requests.Session().post()
-    in the code under test, any Kea API command in the request body is extracted
-    and the text of the next element in that command's fifo becomes the
-    response. Text strings are popped from the fifo after use, while functions
-    are not. If the fifo was empty, an API conformant "command not supported"
-    response is returned instead.
+    responsequeue.add(command, text_or_func, attrs=None) --- appends the given
+    text_or_func, which is either a string or a zero argument string function,
+    to the fifo queue for the given Kea API command string. On any calls to
+    requests.post() or requests.Session().post() in the code under test, the Kea
+    API command is extracted from the request body and the text of the next
+    element in that command's fifo becomes the response. Text strings are popped
+    from the fifo after use, while functions are not. If the fifo was empty, an
+    API conformant "command not supported" response is returned instead. The
+    attrs keyword can optionally be set to a dictionary of attributes to set on
+    the response. Setting attrs={"status": 404} will cause the response to be a
+    HTTP 404 error.
 
-    responsequeue.clear() --- Empty the fifo queues of all commands, removing
-    all previously configured command responses.
+    responsequeue.clear() --- Empty the fifo queues of all commands. This
+    removes all previously configured command responses.
 
     responsequeue.autofill(service, config, statistics) --- fill the queue for
     the "config-get" and "statistic-get" commands to mimic the response texts
@@ -372,8 +378,9 @@ def responsequeue(monkeypatch):
     ("dhcp4" for ipv4 DHCP "dhcp6" for ipv6 DHCP) with config `config` and
     statistics `statistics`.
     """
-    # Dictonary of fifo queues, keyed by command name. A queue stored with key K has the textual content of the responses we want to return (in fifo order, one per call) on a call to requests.post with data that represents a Kea Control Agent command K
-    command_responses = {}
+    command_responses: dict[
+        str, deque[tuple[Union[str, Callable[[dict, list], str]], dict]]
+    ] = {}
     unknown_command_response = """[
   {{
     "result": 2,
@@ -382,6 +389,7 @@ def responsequeue(monkeypatch):
 ]"""
 
     def new_post_function(url, *args, data="{}", **kwargs):
+        """This function will replace requests.post()"""
         if isinstance(data, dict):
             data = json.dumps(data)
         elif isinstance(data, bytes):
@@ -409,7 +417,7 @@ def responsequeue(monkeypatch):
             if callable(text_or_func):
                 kea_arguments = data.get("arguments", {})
                 kea_service = data.get("service", [])
-                response_text = text_or_func(arguments=kea_arguments, service=kea_service)
+                response_text = text_or_func(kea_arguments, kea_service)
             else:
                 response_text = str(text_or_func)
                 fifo.popleft()
@@ -422,7 +430,7 @@ def responsequeue(monkeypatch):
         response.headers = kwargs.get("headers", {})
         response.cookies = kwargs.get("cookies", {})
         response.url = url
-        response.close = lambda: True
+        response.close = lambda: None
 
         for attr, value in attrs.items():
             setattr(response, attr, value)
@@ -430,6 +438,7 @@ def responsequeue(monkeypatch):
         return response
 
     def new_post_method(self, url, *args, **kwargs):
+        """This function will replace requests.Session.post()"""
         return new_post_function(url, *args, **kwargs)
 
     def add_command_response(command_name, text, attrs=None):
@@ -444,21 +453,25 @@ def responsequeue(monkeypatch):
         expected_service, config=None, statistics=None, attrs=None
     ):
         attrs = attrs or {}
-        def config_get_response(arguments, service):
-            assert service == [
-                expected_service
-            ], f"KeaDhcpSource for service [{expected_service}] should not send requests to {service}"
-            return kearesponse(config)
-
-        def statistic_get_response(arguments, service):
-            assert service == [
-                expected_service
-            ], f"KeaDhcpSource for service [{expected_service}] should not send requests to {service}"
-            return kearesponse({arguments["name"]: statistics[arguments["name"]]})
 
         if config is not None:
+
+            def config_get_response(arguments, service):
+                assert service == [
+                    expected_service
+                ], f"KeaDhcpSource for service [{expected_service}] should not send requests to {service}"
+                return kearesponse(config)
+
             add_command_response("config-get", config_get_response, attrs)
+
         if statistics is not None:
+
+            def statistic_get_response(arguments, service):
+                assert service == [
+                    expected_service
+                ], f"KeaDhcpSource for service [{expected_service}] should not send requests to {service}"
+                return kearesponse({arguments["name"]: statistics[arguments["name"]]})
+
             add_command_response("statistic-get", statistic_get_response, attrs)
 
     class ResponseQueue:
