@@ -19,9 +19,9 @@ def test_fetch_metrics_should_return_most_rececent_metric_in_statistic_responses
     config, statistics, expected_metrics = valid_dhcp4
     responsequeue.autofill("dhcp4", config=config, statistics=statistics)
     source = KeaDhcpMetricSource("http://example.org/")
-    assert set(source.fetch_metrics()) == set(
-        expected_metrics
-    )  # TODO: Timestamps need not be exactly the same
+    actual = set(metric.replace(timestamp=0.0) for metric in source.fetch_metrics())
+    expected = set(metric.replace(timestamp=0.0) for metric in expected_metrics)
+    assert actual == expected
 
 
 def test_fetch_metrics_should_gracefully_handle_empty_arguments_in_responses_from_api(
