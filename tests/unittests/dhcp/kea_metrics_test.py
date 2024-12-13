@@ -13,15 +13,8 @@ def test_fetch_metrics_should_return_most_rececent_metric_in_statistic_responses
     valid_dhcp4, responsequeue
 ):
     """
-    For each metric type, the API returns a response where the "arguments"
-    dictionary contains either
-    (i)  a list of metrics where the most recent metric is the first item (the
-         usual case), or
-    (ii) nothing (the unusual case where the requested statistic is not found)
-    https://kea.readthedocs.io/en/kea-2.2.0/arm/stats.html#the-statistic-get-command
-
-    This test checks that fetch_metrics() returns the most recent metric (the
-    first in the list) for each metric type.
+    This test checks that fetch_metrics() returns the most recent metric
+    in the list of metrics returned by Kea for each metric type
     """
     config, statistics, expected_metrics = valid_dhcp4
     responsequeue.autofill("dhcp4", config=config, statistics=statistics)
@@ -35,11 +28,13 @@ def test_fetch_metrics_should_gracefully_handle_empty_arguments_in_responses_fro
     valid_dhcp4, responsequeue
 ):
     """
-    If the Kea DHCP server we query does not have any subnets configured, the
-    correct thing to do is to return an empty iterable, (as opposed to failing).
+    If the Kea DHCP server we query does not have any subnets configured (the
+    config returned by the API is empty), the correct thing for fetch_metrics()
+    to do is to return an empty list of metrics (as opposed to failing).
 
-    Likewise, if it returns no statistics for its configured subnets, the
-    correct thing to do is to return an empty iterable.
+    Likewise, the Kea DHCP server we query returns no statistics for its
+    configured subnets, the correct thing to do is to return an empty list of
+    metrics.
     """
     config, statistics, _ = valid_dhcp4
     responsequeue.autofill("dhcp4", config=None, statistics=statistics)
@@ -64,6 +59,8 @@ def test_fetch_metrics_should_gracefully_handle_empty_arguments_in_responses_fro
     # empty map, i.e. only { } as an argument, but the status code still indicates
     # success (0).
     # https://kea.readthedocs.io/en/kea-2.2.0/arm/stats.html#the-statistic-get-command
+    # Here, it may be wished for that NAV prints a warning log stating that Kea doesn't
+    # support the queried-for statistic.
     responsequeue.autofill("dhcp4", config=config, statistics=None)
     responsequeue.add("statistic-get", lambda **_: kearesponse({}))
     assert list(source.fetch_metrics()) == []
