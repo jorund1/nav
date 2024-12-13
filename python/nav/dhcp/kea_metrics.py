@@ -68,9 +68,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
 
     def __init__(
         self,
-        address: Union[str, IP],
-        port: int,
-        https: bool = True,
+        uri: str,
         dhcp_version: int = 4,
         timeout: int = 10,
         tzinfo: Optional[tzinfo] = None,
@@ -90,7 +88,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         :param tzinfo:       the timezone of the Kea Control Agent.
         """
         super()
-        self._rest_uri = _make_uri(address, port, https)
+        self._rest_uri = uri
         self._dhcp_version = dhcp_version
         self._dhcp_config: Optional[dict] = None
         self._timeout = timeout
@@ -102,7 +100,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
                 DhcpMetricKey.ASSIGNED: "assigned-addresses",
             }
         else:
-            raise ValueError(f"Only DHCPv{dhcp_version} is supported")
+            raise ValueError(f"DHCPv{dhcp_version} is not supported")
 
     def fetch_metrics(self) -> list[DhcpMetric]:
         """
@@ -188,7 +186,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         # one. The Kea 2.6 Management API documentation does not specify any
         # explicit ordering of the returned samples, but ISC's official Kea
         # Management API consumer, Stork, relies on the fact that the first
-        # sample in the returned list is the most recent[0], so for simplicity's
+        # sample in the returned list is the most recent^[0], so for simplicity's
         # sake so will we.
         #
         # [0]: https://gitlab.isc.org/isc-projects/stork/-/blob/4193375c01e3ec0b3d862166e2329d76e686d16d/backend/server/apps/kea/rps.go#L223-227
@@ -367,15 +365,6 @@ def _subnets_of_config(config: dict, ip_version: int) -> list[Subnet]:
             continue
         subnets.append(Subnet(subnet_id, IP(netprefix)))
     return subnets
-
-
-def _make_uri(address: Union[IP, str], port: int, https: bool) -> str:
-    address = IP(address).strNormal(wantprefixlen=False)
-    scheme = "https" if https else "http"
-    if address.version() == 4:
-        return f"{scheme}://{address}:{port}/"
-    elif address.version() == 6:
-        return f"{scheme}://[{address}]:{port}/"
 
 
 class KeaException(GeneralException):
