@@ -243,7 +243,7 @@ def valid_dhcp4():
         "subnet[1].declined-addresses": [[0, "2024-07-03 16:13:59.401071"]],
         "subnet[1].total-addresses": [[239, "2024-07-03 16:13:59.401058"]],
         "subnet[2].assigned-addresses": [
-            [1, "2024-07-22 09:06:58.140439"],
+            [0, "2024-07-22 09:06:58.140439"],
             [1, "2024-07-05 20:44:54.230609"],
             [2, "2024-07-05 09:15:05.626595"],
         ],
@@ -286,7 +286,7 @@ def valid_dhcp4():
             datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             IP("192.0.2.0/24"),
             DhcpMetricKey.ASSIGNED,
-            1,
+            0,
         ),
         DhcpMetric(
             datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
