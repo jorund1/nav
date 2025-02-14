@@ -70,9 +70,9 @@ class DhcpMetricKey(Enum):
 
 @dataclass(frozen=True)
 class DhcpMetric:
-    timestamp: float
     subnet_prefix: IP
     key: DhcpMetricKey
+    timestamp: float
     value: int
 
 
