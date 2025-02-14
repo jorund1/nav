@@ -8,134 +8,201 @@ import json
 from requests.exceptions import JSONDecodeError
 from typing import Union, Callable
 from dataclasses import replace
-import datetime
+from datetime import datetime, timedelta
 
 
-def test_fetch_metrics_should_return_most_rececent_metric_in_statistic_responses_from_api(
-    valid_dhcp4, responsequeue
-):
-    """
-    This test checks that fetch_metrics() returns the most recent metric
-    in the list of metrics returned by Kea for each metric type
-    """
-    config, statistics, expected_metrics = valid_dhcp4
-    responsequeue.autofill("dhcp4", config=config, statistics=statistics)
-    source = KeaDhcpMetricSource("http://example.org/")
-    actual = set(metric.replace(timestamp=0.0) for metric in source.fetch_metrics())
-    expected = set(metric.replace(timestamp=0.0) for metric in expected_metrics)
-    assert actual == expected
+class TestRecognizeableResponse:
+    def test_fetch_metrics_should_return_correct_metrics(
+        self, valid_dhcp4, responsequeue
+    ):
+        """
+        This test checks that fetch_metrics() returns the most recent metric
+        for each subnet and metric type from the api response
+        """
 
+        config, statistics, expected_metrics = valid_dhcp4
+        responsequeue.autofill("dhcp4", config=config, statistics=statistics)
+        source = KeaDhcpMetricSource("http://example.org/")
 
-def test_fetch_metrics_should_gracefully_handle_empty_arguments_in_responses_from_api(
-    valid_dhcp4, responsequeue
-):
-    """
-    If the Kea DHCP server we query does not have any subnets configured (the
-    config returned by the API is empty), the correct thing for fetch_metrics()
-    to do is to return an empty list of metrics (as opposed to failing).
+        actual_metrics = source.fetch_metrics()
 
-    Likewise, the Kea DHCP server we query returns no statistics for its
-    configured subnets, the correct thing to do is to return an empty list of
-    metrics.
-    """
-    config, statistics, _ = valid_dhcp4
-    responsequeue.autofill("dhcp4", config=None, statistics=statistics)
-    responsequeue.add("config-get", lambda *a, **ka: kearesponse({"Dhcp4": {}}))
-    source = KeaDhcpMetricSource("http://example.org/")
-    assert list(source.fetch_metrics()) == []
+        def clean(metrics):
+            """
+            Set metric timestamps to zero, because we do not care to compare the
+            time a metric was fetched into NAV.
+            """
+            return [replace(metric, timestamp=0) for metric in metrics]
 
-    responsequeue.clear()
+        assert set(clean(actual_metrics)) == set(clean(expected_metrics))
 
-    responsequeue.autofill("dhcp4", config=config, statistics=None)
-    responsequeue.add(
-        "statistic-get",
-        lambda arguments, *a, **ka: kearesponse({arguments["name"]: []}),
+    def test_fetch_metrics_should_only_have_recent_timestamps(
+        self, valid_dhcp4, responsequeue
+    ):
+        """
+        This test checks that fetch_metrics() only returns metrics that have
+        recent timestamps - so that periodically fetching metrics will form an
+        evenly spaced timeseries (Kea doesn't seem to change timestamps unless
+        metric data is changed, which results in very sporadic timeseries)
+        """
+
+        config, statistics, expected_metrics = valid_dhcp4
+        responsequeue.autofill("dhcp4", config=config, statistics=statistics)
+        source = KeaDhcpMetricSource("http://example.org/")
+
+        actual_metrics = source.fetch_metrics()
+        assert len(actual_metrics) > 0
+        for metric in actual_metrics:
+            assert (
+                metric.timestamp >= (datetime.now() - timedelta(minutes=5)).timestamp()
+            )
+
+    def test_fetch_metrics_should_handle_empty_config_in_api_configuration_response(
+        self, valid_dhcp4, responsequeue
+    ):
+        """
+        We assume in this case that the Kea DHCP server we query just doesn't have
+        any subnets configured
+
+        The correct thing for fetch_metrics() to do in this case is to just
+        return an empty list of metrics since there are no subnets to fetch
+        from.
+
+        TODO: Here, it may be wished for that NAV prints a log info stating
+        that the Kea server isn't configured with any subnets.
+        """
+        config, statistics, _ = valid_dhcp4
+        responsequeue.autofill("dhcp4", config=None, statistics=statistics)
+        responsequeue.add("config-get", lambda *a, **ka: kearesponse({"Dhcp4": {}}))
+        source = KeaDhcpMetricSource("http://example.org/")
+        assert list(source.fetch_metrics()) == []
+
+    def test_fetch_metrics_should_handle_empty_statistic_in_api_statistics_response(
+        self, valid_dhcp4, responsequeue
+    ):
+        """
+        If the Kea DHCP server returns no values for a specific statistic,
+        disregard that metric when creating a list of metrics. In the extreme
+        case that all statistics are empty, return an empty list.
+        """
+        config, statistics, _ = valid_dhcp4
+        responsequeue.autofill("dhcp4", config=config, statistics=None)
+        responsequeue.add(
+            "statistic-get",
+            lambda requestarguments, *a, **ka: kearesponse(
+                {requestarguments["name"]: []}
+            ),
+        )
+        source = KeaDhcpMetricSource("http://example.org/")
+        assert list(source.fetch_metrics()) == []
+
+    def test_fetch_metrics_should_handle_unsupported_statistic_in_statistics_response(
+        self, valid_dhcp4, responsequeue
+    ):
+        """
+        If the Kea DHCP server doesn't support a specific metric (e.g. because we query an
+        outdated version), just disregard that meric, and in the extreme case that no metric
+        is supported, return an empty list.
+
+        TODO: Here, it may be wished for that NAV prints a log warning stating
+        that the Kea server doesn't support some queried-for statistic.
+
+        From the Kea doc:
+        > If the requested statistic is not found, the response contains an
+        > empty map, i.e. only { } as an argument, but the status code still indicates
+        > success (0).
+        > https://web.archive.org/web/20230927054750/https://kea.readthedocs.io/en/kea-2.2.0/arm/stats.html#the-statistic-get-command
+        """
+
+        config, statistics, _ = valid_dhcp4
+        responsequeue.autofill("dhcp4", config=config, statistics=None)
+        responsequeue.add("statistic-get", lambda *a, **ka: kearesponse({}))
+        source = KeaDhcpMetricSource("http://example.org/")
+        assert list(source.fetch_metrics()) == []
+
+    def test_fetch_metrics_should_raise_an_exception_on_http_error_response(
+        self, valid_dhcp4, responsequeue
+    ):
+        """
+        We shouldn't even attempt to find valid responses if the server won't
+        respond correctly
+        """
+
+        config, statistics, _ = valid_dhcp4
+        responsequeue.autofill(
+            "dhcp4",
+            config=config,
+            statistics=statistics,
+            attrs={"status_code": 403},
+        )
+
+        source = KeaDhcpMetricSource("http://example.org/")
+
+        with pytest.raises(KeaException):
+            source.fetch_metrics()
+
+    @pytest.mark.parametrize(
+        "status", [status for status in KeaStatus if status != KeaStatus.SUCCESS]
     )
-    assert list(source.fetch_metrics()) == []
+    def test_fetch_metrics_should_raise_an_exception_on_error_status_in_config_response_from_api(
+        self, valid_dhcp4, responsequeue, status
+    ):
+        """
+        We shouldn't even attempt to continue if the server reports
+        an error regarding serving its configuration
+        """
+        config, statistics, _ = valid_dhcp4
+        responsequeue.autofill("dhcp4", config=None, statistics=statistics)
+        responsequeue.add("config-get", kearesponse(config, status=status))
+        source = KeaDhcpMetricSource("http://example.org/")
+        with pytest.raises(KeaException):
+            source.fetch_metrics()
 
-    responsequeue.clear()
-
-    # From the doc:
-    # The server returns details of the requested statistic, with a result of 0
-    # indicating success and the specified statistic as the value of the arguments
-    # parameter. If the requested statistic is not found, the response contains an
-    # empty map, i.e. only { } as an argument, but the status code still indicates
-    # success (0).
-    # https://kea.readthedocs.io/en/kea-2.2.0/arm/stats.html#the-statistic-get-command
-    # Here, it may be wished for that NAV prints a warning log stating that Kea doesn't
-    # support the queried-for statistic.
-    responsequeue.autofill("dhcp4", config=config, statistics=None)
-    responsequeue.add("statistic-get", lambda *a, **ka: kearesponse({}))
-    assert list(source.fetch_metrics()) == []
-
-
-def test_fetch_metrics_should_raise_an_exception_on_http_error_response_from_api(
-    valid_dhcp4, responsequeue
-):
-    config, statistics, _ = valid_dhcp4
-    responsequeue.autofill(
-        "dhcp4",
-        config=config,
-        statistics=statistics,
-        attrs={"status_code": 403},
+    @pytest.mark.parametrize(
+        "status", [status for status in KeaStatus if status != KeaStatus.SUCCESS]
     )
+    def test_fetch_metrics_should_raise_an_exception_on_error_status_in_statistic_response_from_api(
+        self, valid_dhcp4, responsequeue, status
+    ):
+        """
+        We shouldn't even attempt to continue if the server reports
+        an error regarding serving statistics
+        """
+        config, statistics, _ = valid_dhcp4
+        responsequeue.autofill("dhcp4", config=config, statistics=None)
+        responsequeue.add("statistic-get", kearesponse(statistics, status=status))
+        source = KeaDhcpMetricSource("http://example.org/")
+        with pytest.raises(KeaException):
+            source.fetch_metrics()
 
-    source = KeaDhcpMetricSource("http://example.org/")
-
-    with pytest.raises(KeaException):
-        source.fetch_metrics()
-
-
-@pytest.mark.parametrize(
-    "status", [status for status in KeaStatus if status != KeaStatus.SUCCESS]
-)
-def test_fetch_metrics_should_raise_an_exception_on_error_status_in_config_response_from_api(
-    valid_dhcp4, responsequeue, status
-):
-    config, statistics, _ = valid_dhcp4
-    responsequeue.autofill("dhcp4", config=None, statistics=statistics)
-    responsequeue.add("config-get", kearesponse(config, status=status))
-    source = KeaDhcpMetricSource("http://example.org/")
-    with pytest.raises(KeaException):
-        source.fetch_metrics()
-
-
-@pytest.mark.parametrize(
-    "status", [status for status in KeaStatus if status != KeaStatus.SUCCESS]
-)
-def test_fetch_metrics_should_raise_an_exception_on_error_status_in_statistic_response_from_api(
-    valid_dhcp4, responsequeue, status
-):
-    config, statistics, _ = valid_dhcp4
-    responsequeue.autofill("dhcp4", config=config, statistics=None)
-    responsequeue.add("statistic-get", kearesponse(statistics, status=status))
-    source = KeaDhcpMetricSource("http://example.org/")
-    with pytest.raises(KeaException):
-        source.fetch_metrics()
-
-
-@pytest.mark.parametrize(
-    "status",
-    [
-        status
-        for status in KeaStatus
-        if status not in (KeaStatus.SUCCESS, KeaStatus.UNSUPPORTED)
-    ],
-)
-def test_fetch_metrics_should_raise_an_exception_on_error_status_in_config_hash_response_from_api(
-    valid_dhcp4, responsequeue, status
-):
-    foohash = "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"
-    config, statistics, _ = valid_dhcp4
-    source = KeaDhcpMetricSource("http://example.org/")
-    config["Dhcp4"]["hash"] = foohash
-    responsequeue.autofill("dhcp4", config=config, statistics=statistics)
-    responsequeue.add("config-hash-get", kearesponse({"hash": foohash}, status=status))
-    with pytest.raises(KeaException):
-        source.fetch_metrics()
+    @pytest.mark.parametrize(
+        "status",
+        [
+            status
+            for status in KeaStatus
+            if status not in (KeaStatus.SUCCESS, KeaStatus.UNSUPPORTED)
+        ],
+    )
+    def test_fetch_metrics_should_raise_an_exception_on_error_status_in_config_hash_response_from_api(
+        self, valid_dhcp4, responsequeue, status
+    ):
+        """
+        We shouldn't even attempt to continue if the server reports
+        an error regarding serving configuration hash other than it
+        being unsupported
+        """
+        foohash = "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"
+        config, statistics, _ = valid_dhcp4
+        source = KeaDhcpMetricSource("http://example.org/")
+        config["Dhcp4"]["hash"] = foohash
+        responsequeue.autofill("dhcp4", config=config, statistics=statistics)
+        responsequeue.add(
+            "config-hash-get", kearesponse({"hash": foohash}, status=status)
+        )
+        with pytest.raises(KeaException):
+            source.fetch_metrics()
 
 
-class TestUnrecognizableResponses:
+class TestUnrecognizableResponse:
     """
     If Kea responds in an unrecognizable way, we should always fail loudly,
     because chances are either the host we're sending requests to is not a Kea
@@ -269,6 +336,11 @@ def valid_dhcp4():
         "subnet[5].total-addresses": [[243, "2024-07-03 16:13:59.401059"]],
     }
 
+    # Each list in the 'statistics' response from the api (see above dict) is a
+    # timeseries for a specific metric type for a specific subnet.  The first
+    # metric in each list is assumed to be the most recent, and this is the
+    # metric we expect to get for each metric type and subnet after processing
+    # the api response.
     expected_metrics = [
         DhcpMetric(
             IP("192.0.1.0/24"),
@@ -358,16 +430,19 @@ def responsequeue(monkeypatch):
     namespace with three functions:
 
     responsequeue.add(command, text_or_func, attrs=None) --- appends the given
-    text_or_func, which is either a string or a zero argument string function,
-    to the fifo queue for the given Kea API command string. On any calls to
+    text_or_func, which is either a string or a function f(dict, list) ->
+    string, to the given command string's associated fifo queue to use in
+    generating responses for Kea API requests for command. On any calls to
     requests.post() or requests.Session().post() in the code under test, the Kea
     API command is extracted from the request body and the text of the next
-    element in that command's fifo becomes the response. Text strings are popped
-    from the fifo after use, while functions are not. If the fifo was empty, an
-    API conformant "command not supported" response is returned instead. The
-    attrs keyword can optionally be set to a dictionary of attributes to set on
-    the response. Setting attrs={"status": 404} will cause the response to be a
-    HTTP 404 error.
+    element in that command's fifo becomes the text-value of the mocked
+    requests.post() requests.Response return value. Text strings are popped from
+    the fifo after use, while functions are not. If the fifo was empty, an API
+    conformant "command not supported" response is returned instead. The attrs
+    keyword (see again the function signature at the top of this paragraph) can
+    optionally be set to a dictionary of attributes to set on the
+    requests.Response response. Setting attrs={"status": 404} will cause the
+    response to be a HTTP 404 error.
 
     responsequeue.clear() --- Empty the fifo queues of all commands. This
     removes all previously configured command responses.

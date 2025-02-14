@@ -88,7 +88,9 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         :param tzinfo:       the timezone of the Kea Control Agent.
         """
         super()
-        self._rest_uri = uri
+        self._rest_uri = (
+            uri  # TODO: Potential secrets are sent over HTTP, should enforce TLS!
+        )
         self._dhcp_version = dhcp_version
         self._dhcp_config: Optional[dict] = None
         self._timeout = timeout
@@ -183,7 +185,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
             return None
 
         # The Kea server may be configured to keep track of the N most recent
-        # metric samples for some N>1, but we only care about the most recent
+        # metric samples for some N>=1, but we only care about the most recent
         # one. The Kea 2.6 Management API documentation does not specify any
         # explicit ordering of the returned samples, but ISC's official Kea
         # Management API consumer, Stork, relies on the fact that the first
