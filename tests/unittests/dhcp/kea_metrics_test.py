@@ -7,6 +7,8 @@ from IPy import IP
 import json
 from requests.exceptions import JSONDecodeError
 from typing import Union, Callable
+from dataclasses import replace
+import datetime
 
 
 def test_fetch_metrics_should_return_most_rececent_metric_in_statistic_responses_from_api(
@@ -38,7 +40,7 @@ def test_fetch_metrics_should_gracefully_handle_empty_arguments_in_responses_fro
     """
     config, statistics, _ = valid_dhcp4
     responsequeue.autofill("dhcp4", config=None, statistics=statistics)
-    responsequeue.add("config-get", lambda **_: kearesponse({"Dhcp4": {}}))
+    responsequeue.add("config-get", lambda *a, **ka: kearesponse({"Dhcp4": {}}))
     source = KeaDhcpMetricSource("http://example.org/")
     assert list(source.fetch_metrics()) == []
 
@@ -46,7 +48,8 @@ def test_fetch_metrics_should_gracefully_handle_empty_arguments_in_responses_fro
 
     responsequeue.autofill("dhcp4", config=config, statistics=None)
     responsequeue.add(
-        "statistic-get", lambda arguments, **_: kearesponse({arguments["name"]: []})
+        "statistic-get",
+        lambda arguments, *a, **ka: kearesponse({arguments["name"]: []}),
     )
     assert list(source.fetch_metrics()) == []
 
@@ -62,7 +65,7 @@ def test_fetch_metrics_should_gracefully_handle_empty_arguments_in_responses_fro
     # Here, it may be wished for that NAV prints a warning log stating that Kea doesn't
     # support the queried-for statistic.
     responsequeue.autofill("dhcp4", config=config, statistics=None)
-    responsequeue.add("statistic-get", lambda **_: kearesponse({}))
+    responsequeue.add("statistic-get", lambda *a, **ka: kearesponse({}))
     assert list(source.fetch_metrics()) == []
 
 
@@ -73,7 +76,7 @@ def test_fetch_metrics_should_raise_an_exception_on_http_error_response_from_api
     responsequeue.autofill(
         "dhcp4",
         config=config,
-        statistic=statistics,
+        statistics=statistics,
         attrs={"status_code": 403},
     )
 
