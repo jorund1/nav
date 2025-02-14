@@ -271,63 +271,63 @@ def valid_dhcp4():
 
     expected_metrics = [
         DhcpMetric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140438+00:00").timestamp(),
             IP("192.0.1.0/24"),
             DhcpMetricKey.ASSIGNED,
+            datetime.fromisoformat("2024-07-22T09:06:58.140438+00:00").timestamp(),
             1,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401058+00:00").timestamp(),
             IP("192.0.1.0/24"),
             DhcpMetricKey.TOTAL,
+            datetime.fromisoformat("2024-07-03T16:13:59.401058+00:00").timestamp(),
             239,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             IP("192.0.2.0/24"),
             DhcpMetricKey.ASSIGNED,
+            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             0,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
             IP("192.0.2.0/24"),
             DhcpMetricKey.TOTAL,
+            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
             240,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             IP("192.0.3.0/24"),
             DhcpMetricKey.ASSIGNED,
+            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             4,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
             IP("192.0.3.0/24"),
             DhcpMetricKey.TOTAL,
+            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
             241,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             IP("192.0.4.0/24"),
             DhcpMetricKey.ASSIGNED,
+            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             1,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
             IP("192.0.4.0/24"),
             DhcpMetricKey.TOTAL,
+            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
             242,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             IP("192.0.5.0/24"),
             DhcpMetricKey.ASSIGNED,
+            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             1,
         ),
         DhcpMetric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
             IP("192.0.5.0/24"),
             DhcpMetricKey.TOTAL,
+            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
             243,
         ),
     ]
