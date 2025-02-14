@@ -193,9 +193,9 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         # [0]: https://gitlab.isc.org/isc-projects/stork/-/blob/4193375c01e3ec0b3d862166e2329d76e686d16d/backend/server/apps/kea/rps.go#L223-227
         value, timestring = kea_metric_samples[0]
         return DhcpMetric(
-            self._access_time,
             subnet.prefix,
             metric_key,
+            self._access_time,
             value,
         )
 
