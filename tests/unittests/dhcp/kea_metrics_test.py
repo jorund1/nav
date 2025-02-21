@@ -1,6 +1,6 @@
 from collections import deque
 from nav.dhcp.kea_metrics import *
-from nav.dhcp.generic_metrics import DhcpMetric
+from nav.dhcp.kea_metrics import _KeaStatus, _Metric
 import pytest
 import requests
 from IPy import IP
@@ -22,7 +22,7 @@ class TestRecognizeableResponse:
 
         config, statistics, expected_metrics = valid_dhcp4
         responsequeue.autofill("dhcp4", config=config, statistics=statistics)
-        source = KeaDhcpMetricSource("http://example.org/")
+        source = Client("http://example.org/")
 
         actual_metrics = source.fetch_metrics()
 
@@ -47,7 +47,7 @@ class TestRecognizeableResponse:
 
         config, statistics, expected_metrics = valid_dhcp4
         responsequeue.autofill("dhcp4", config=config, statistics=statistics)
-        source = KeaDhcpMetricSource("http://example.org/")
+        source = Client("http://example.org/")
 
         actual_metrics = source.fetch_metrics()
         assert len(actual_metrics) > 0
@@ -73,7 +73,7 @@ class TestRecognizeableResponse:
         config, statistics, _ = valid_dhcp4
         responsequeue.autofill("dhcp4", config=None, statistics=statistics)
         responsequeue.add("config-get", lambda *a, **ka: kearesponse({"Dhcp4": {}}))
-        source = KeaDhcpMetricSource("http://example.org/")
+        source = Client("http://example.org/")
         assert list(source.fetch_metrics()) == []
 
     def test_fetch_metrics_should_handle_empty_statistic_in_api_statistics_response(
@@ -92,7 +92,7 @@ class TestRecognizeableResponse:
                 {requestarguments["name"]: []}
             ),
         )
-        source = KeaDhcpMetricSource("http://example.org/")
+        source = Client("http://example.org/")
         assert list(source.fetch_metrics()) == []
 
     def test_fetch_metrics_should_handle_unsupported_statistic_in_statistics_response(
@@ -116,7 +116,7 @@ class TestRecognizeableResponse:
         config, statistics, _ = valid_dhcp4
         responsequeue.autofill("dhcp4", config=config, statistics=None)
         responsequeue.add("statistic-get", lambda *a, **ka: kearesponse({}))
-        source = KeaDhcpMetricSource("http://example.org/")
+        source = Client("http://example.org/")
         assert list(source.fetch_metrics()) == []
 
     def test_fetch_metrics_should_raise_an_exception_on_http_error_response(
@@ -135,13 +135,13 @@ class TestRecognizeableResponse:
             attrs={"status_code": 403},
         )
 
-        source = KeaDhcpMetricSource("http://example.org/")
+        source = Client("http://example.org/")
 
         with pytest.raises(KeaException):
             source.fetch_metrics()
 
     @pytest.mark.parametrize(
-        "status", [status for status in KeaStatus if status != KeaStatus.SUCCESS]
+        "status", [status for status in _KeaStatus if status != _KeaStatus.SUCCESS]
     )
     def test_fetch_metrics_should_raise_an_exception_on_error_status_in_config_response_from_api(
         self, valid_dhcp4, responsequeue, status
@@ -153,12 +153,12 @@ class TestRecognizeableResponse:
         config, statistics, _ = valid_dhcp4
         responsequeue.autofill("dhcp4", config=None, statistics=statistics)
         responsequeue.add("config-get", kearesponse(config, status=status))
-        source = KeaDhcpMetricSource("http://example.org/")
+        source = Client("http://example.org/")
         with pytest.raises(KeaException):
             source.fetch_metrics()
 
     @pytest.mark.parametrize(
-        "status", [status for status in KeaStatus if status != KeaStatus.SUCCESS]
+        "status", [status for status in _KeaStatus if status != _KeaStatus.SUCCESS]
     )
     def test_fetch_metrics_should_raise_an_exception_on_error_status_in_statistic_response_from_api(
         self, valid_dhcp4, responsequeue, status
@@ -170,7 +170,7 @@ class TestRecognizeableResponse:
         config, statistics, _ = valid_dhcp4
         responsequeue.autofill("dhcp4", config=config, statistics=None)
         responsequeue.add("statistic-get", kearesponse(statistics, status=status))
-        source = KeaDhcpMetricSource("http://example.org/")
+        source = Client("http://example.org/")
         with pytest.raises(KeaException):
             source.fetch_metrics()
 
@@ -178,8 +178,8 @@ class TestRecognizeableResponse:
         "status",
         [
             status
-            for status in KeaStatus
-            if status not in (KeaStatus.SUCCESS, KeaStatus.UNSUPPORTED)
+            for status in _KeaStatus
+            if status not in (_KeaStatus.SUCCESS, _KeaStatus.UNSUPPORTED)
         ],
     )
     def test_fetch_metrics_should_raise_an_exception_on_error_status_in_config_hash_response_from_api(
@@ -192,7 +192,7 @@ class TestRecognizeableResponse:
         """
         foohash = "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"
         config, statistics, _ = valid_dhcp4
-        source = KeaDhcpMetricSource("http://example.org/")
+        source = Client("http://example.org/")
         config["Dhcp4"]["hash"] = foohash
         responsequeue.autofill("dhcp4", config=config, statistics=statistics)
         responsequeue.add(
@@ -216,7 +216,7 @@ class TestUnrecognizableResponse:
         self, valid_dhcp4, responsequeue
     ):
         config, statistics, _ = valid_dhcp4
-        source = KeaDhcpMetricSource("http://example.org/")
+        source = Client("http://example.org/")
 
         responsequeue.autofill("dhcp4", config=None, statistics=statistics)
         responsequeue.add("config-get", self.invalid_response)
@@ -227,7 +227,7 @@ class TestUnrecognizableResponse:
         self, valid_dhcp4, responsequeue
     ):
         config, statistics, _ = valid_dhcp4
-        source = KeaDhcpMetricSource("http://example.org/")
+        source = Client("http://example.org/")
 
         responsequeue.autofill("dhcp4", config=config, statistics=None)
         responsequeue.add("statistic-get", self.invalid_response)
@@ -238,7 +238,7 @@ class TestUnrecognizableResponse:
         self, valid_dhcp4, responsequeue
     ):
         config, statistics, _ = valid_dhcp4
-        source = KeaDhcpMetricSource("http://example.org/")
+        source = Client("http://example.org/")
         config["Dhcp4"]["hash"] = "foo"
         responsequeue.autofill("dhcp4", config=config, statistics=statistics)
         responsequeue.add("config-hash-get", self.invalid_response)
@@ -342,64 +342,64 @@ def valid_dhcp4():
     # metric we expect to get for each metric type and subnet after processing
     # the api response.
     expected_metrics = [
-        DhcpMetric(
-            IP("192.0.1.0/24"),
-            DhcpMetricKey.ASSIGNED,
+        _Metric(
             datetime.fromisoformat("2024-07-22T09:06:58.140438+00:00").timestamp(),
+            IP("192.0.1.0/24"),
+            "assigned",
             1,
         ),
-        DhcpMetric(
-            IP("192.0.1.0/24"),
-            DhcpMetricKey.TOTAL,
+        _Metric(
             datetime.fromisoformat("2024-07-03T16:13:59.401058+00:00").timestamp(),
+            IP("192.0.1.0/24"),
+            "total",
             239,
         ),
-        DhcpMetric(
-            IP("192.0.2.0/24"),
-            DhcpMetricKey.ASSIGNED,
+        _Metric(
             datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
+            IP("192.0.2.0/24"),
+            "assigned",
             0,
         ),
-        DhcpMetric(
-            IP("192.0.2.0/24"),
-            DhcpMetricKey.TOTAL,
+        _Metric(
             datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
+            IP("192.0.2.0/24"),
+            "total",
             240,
         ),
-        DhcpMetric(
-            IP("192.0.3.0/24"),
-            DhcpMetricKey.ASSIGNED,
+        _Metric(
             datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
+            IP("192.0.3.0/24"),
+            "assigned",
             4,
         ),
-        DhcpMetric(
-            IP("192.0.3.0/24"),
-            DhcpMetricKey.TOTAL,
+        _Metric(
             datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
+            IP("192.0.3.0/24"),
+            "total",
             241,
         ),
-        DhcpMetric(
-            IP("192.0.4.0/24"),
-            DhcpMetricKey.ASSIGNED,
+        _Metric(
             datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
+            IP("192.0.4.0/24"),
+            "assigned",
             1,
         ),
-        DhcpMetric(
-            IP("192.0.4.0/24"),
-            DhcpMetricKey.TOTAL,
+        _Metric(
             datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
+            IP("192.0.4.0/24"),
+            "total",
             242,
         ),
-        DhcpMetric(
-            IP("192.0.5.0/24"),
-            DhcpMetricKey.ASSIGNED,
+        _Metric(
             datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
+            IP("192.0.5.0/24"),
+            "assigned",
             1,
         ),
-        DhcpMetric(
-            IP("192.0.5.0/24"),
-            DhcpMetricKey.TOTAL,
+        _Metric(
             datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
+            IP("192.0.5.0/24"),
+            "total",
             243,
         ),
     ]
@@ -407,7 +407,7 @@ def valid_dhcp4():
     return config, statistics, expected_metrics
 
 
-def kearesponse(val, status=KeaStatus.SUCCESS):
+def kearesponse(val, status=_KeaStatus.SUCCESS):
     """
     Make a Kea API conformant response body whose response value (called
     response arguments in the specification) is given by the dictionary `val`
