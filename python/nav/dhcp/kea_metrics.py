@@ -64,6 +64,7 @@ class _Metric:
                For more detailed info on this metric, see e.g.
                https://web.archive.org/web/20240816164358/https://kea.readthedocs.io/en/kea-2.2.0/arm/dhcp6-srv.html#duplicate-addresses-dhcpdecline-support
     """
+
     timestamp: float
     subnet_prefix: IP
     name: Literal["total", "assigned", "declined"]
@@ -90,7 +91,7 @@ class Client:
                              the Kea Control Agent before timing out.
         """
         if not uri.startswith("https://"):
-            _logger.warning("Kea Management API client configured to use non-HTTPS")
+            _logger.warning("Kea Management API client configured to use plain HTTP")
 
         self._rest_uri: str = uri
         self._dhcp_version: int = dhcp_version
@@ -110,10 +111,8 @@ class Client:
     def fetch_metrics(self) -> list[_Metric]:
         """
         Fetches and returns a list containing the most recent DHCP
-        metrics for each subnet managed by the Kea DHCP server. For
-        each subnet and metric-name combination, there is at least
-        one corresponding metric in the returned list if no errors
-        occur.
+        metrics for each subnet + metric-name combination managed by
+        the Kea DHCP server.
 
         If the Kea Control Agent responds with an empty response to
         one or more of the requests for some metric(s), these metrics
@@ -144,7 +143,6 @@ class Client:
                     metric = _Metric(start_time, subnet.prefix, metric_name, value)
                     metrics.append(metric)
 
-
         maybe_updated_config = self._fetch_config()
         maybe_updated_subnets = self._subnets_of_config(maybe_updated_config)
         if sorted(subnets) != sorted(maybe_updated_subnets):
@@ -157,7 +155,7 @@ class Client:
         self._session = None
         end_time = datetime.now().timestamp()
         _logger.info(
-            "Fetched %d metrics for %d subnets in %f seconds from %s",
+            "Fetched %d metric(s) for %d subnet(s) in %f seconds from %s",
             len(metrics),
             len(subnets),
             end_time - start_time,
@@ -166,7 +164,7 @@ class Client:
         return metrics
 
     def _fetch_metric_value(
-            self, subnet: _Subnet, api_metric_name: str
+        self, subnet: _Subnet, api_metric_name: str
     ) -> Optional[int]:
         """
         Return the most recent metric value recorded by the Kea DHCP server for
@@ -201,7 +199,6 @@ class Client:
         # [0]: https://gitlab.isc.org/isc-projects/stork/-/blob/4193375c01e3ec0b3d862166e2329d76e686d16d/backend/server/apps/kea/rps.go#L223-227
         value, timestring = samples[0]
         return value
-
 
     def _fetch_config(self) -> dict:
         """
@@ -253,9 +250,9 @@ class Client:
         server-end causes a descriptive subclass of KeaException to be raised.
         """
         log_summary = {
-            "Request status": "Sending request to Kea Control Agent",
-            "Location": self._rest_uri,
-            "Command": command,
+            "Client status": "Waiting for response from Kea Control Agent",
+            "Kea Control Agent URI": self._rest_uri,
+            "Management API command": command,
         }
         _logger.debug(log_summary)
 
@@ -274,21 +271,21 @@ class Client:
                 timeout=self._timeout,
                 headers={"Content-Type": "application/json"},
             )
-            log_summary["Request status"] = "Received response from Kea Control Agent"
-            log_summary["Response status"] = (
+            log_summary["Client status"] = "Received response from Kea Control Agent"
+            log_summary["HTTP status"] = (
                 f"HTTP {responses.status_code}: {responses.reason}"
             )
             responses.raise_for_status()
             responses = responses.json()
         except JSONDecodeError as err:
             raise KeaException(
-                "Server does not look like a Kea Control Agent; "
+                "Server does not look like a Kea Control Agent; ",
                 "response was not valid JSON",
                 log_summary,
             ) from err
         except RequestException as err:
             raise KeaException(
-                "HTTP-related error during request to server", log_summary
+                "Error with connection to Kea Control Agent", log_summary
             ) from err
 
         # Any valid response from Kea is a JSON list with one entry corresponding to the
@@ -344,12 +341,17 @@ class Client:
         subnetkey = f"subnet{self._dhcp_version}"
         for subnet in chain.from_iterable(
             [config.get(subnetkey, [])]
-            + [network.get(subnetkey, []) for network in config.get("shared-networks", [])]
+            + [
+                network.get(subnetkey, [])
+                for network in config.get("shared-networks", [])
+            ]
         ):
             subnet_id = subnet.get("id", None)
             netprefix = subnet.get("subnet", None)
             if subnet_id is None or netprefix is None:
-                _logger.warning("id and/or prefix missing from a subnet's configuration")
+                _logger.warning(
+                    "id and/or prefix missing from a subnet's configuration"
+                )
                 continue
             subnets.append(_Subnet(subnet_id, IP(netprefix)))
         return subnets
@@ -365,19 +367,15 @@ class KeaException(GeneralException):
         self.details = details
 
     def __str__(self) -> str:
-        doc = ""
         message = ""
         details = ""
-        if self.__doc__:
-            doc = self.__doc__
-        if self.message:
-            message = f": {self.message}"
+        message = f"{self.message}" or self.__doc__ or ""
         if self.details:
-            details = "\nDetails:\n"
+            details = "\nError details:\n"
             details += "\n".join(
-                f"{label}: {info}" for label, info in self.details.items()
+                f"\t{label} was '{info}'" for label, info in self.details.items()
             )
-        return "".join([doc, message, details])
+        return "".join([message, details])
 
 
 class KeaError(KeaException):
