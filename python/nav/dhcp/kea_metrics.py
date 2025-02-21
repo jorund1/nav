@@ -14,56 +14,66 @@
 # along with NAV. If not, see <http://www.gnu.org/licenses/>.
 #
 """
-This module contains the KeaDhcpMetricSource class, used for fetching DHCP
-metrics from Kea DHCP servers
+Fetch DHCP metrics from Kea DHCP servers by using Kea Management API
 
-                            |
-             Managed by NAV | Managed externally
-                            |
-                       HTTP |                       IPC
-KeaDhcpMetricSource <---------> Kea Control Agent <=====> Kea DHCP4 server/Kea DHCP6 server
-                            |
-                            |
+             |
+   NAV side  |  Kea side
+             |
+        HTTP |                         IPC
+Client <---------> Kea Control Agent <=====> Kea DHCP4 server
+             |       (API server)
+             |
 """
 
 from dataclasses import dataclass
-from datetime import datetime, tzinfo
+from datetime import datetime
 from enum import IntEnum
 from itertools import chain
 import json
 import logging
-from typing import Optional, Union
+from typing import Optional, Literal
 
 from IPy import IP
-import requests
 from requests import RequestException, JSONDecodeError, Session
 
-from nav.dhcp.generic_metrics import DhcpMetric, DhcpMetricKey, DhcpMetricSource
 from nav.errors import GeneralException
 
 _logger = logging.getLogger(__name__)
 
 
 @dataclass(order=True, frozen=True)
-class Subnet:
+class _Subnet:
     id: int
     prefix: IP
 
 
-class KeaDhcpMetricSource(DhcpMetricSource):
+@dataclass(order=True, frozen=True)
+class _Metric:
     """
-    Communicates with a Kea Control Agent to enable fetching of DHCP
-    metrics for each subnet managed by some specific underlying Kea
-    DHCP4 or Kea DHCP6 server.
+    Represents a metric collected from a DHCP server. Three types of metrics
+    with different value interpretations supported:
 
-    The sole purpose of this class is to implement the superclass's
-    fetch_metrics() method. Public methods are:
+    total:     value is the maximum possible amount of active leases in the
+               subnet
 
-    * fetch_metrics(): Fetches DHCP metrics for each subnet managed by
-      the Kea DHCP server. Metrics are returned as a list.
+    assigned:  value is the current amount of active leases in the subnet
 
-    * fetch_metrics_to_graphite(): Inherited from superclass. Fetches
-    DHCP metrics as above and sends these to a graphite server.
+    declined:  value is the amount of DHCP-maintained addresses in use by an
+               entity unknown to the server and thus not available for
+               assignment. (Should ideally always be zero.)
+               For more detailed info on this metric, see e.g.
+               https://web.archive.org/web/20240816164358/https://kea.readthedocs.io/en/kea-2.2.0/arm/dhcp6-srv.html#duplicate-addresses-dhcpdecline-support
+    """
+    timestamp: float
+    subnet_prefix: IP
+    name: Literal["total", "assigned", "declined"]
+    value: int
+
+
+class Client:
+    """
+    Kea Management API client that fetches DHCP metrics for each subnet managed
+    by some specific underlying Kea DHCP server.
     """
 
     def __init__(
@@ -71,45 +81,37 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         uri: str,
         dhcp_version: int = 4,
         timeout: int = 10,
-        tzinfo: Optional[tzinfo] = None,
     ):
         """
-        Instantiate a KeaDhcpMetricSource that fetches DHCP metrics
-        from the Kea DHCP server managing IP version `dhcp_version`
-        addresses, whose metrics is reachable via the Kea Control
-        Agent listening to `port` on `address`.
-
-        :param address:      IP address of the Kea Control Agent
-        :param port:         TCP port of the Kea Control Agent
-        :param https:        if True, use https. Otherwise, use http
-        :param dhcp_version: ip version served by Kea DHCP server
-        :param timeout:      how long to wait for a http response from
-                             the Kea Control Agent before timing out
-        :param tzinfo:       the timezone of the Kea Control Agent.
+        :param uri:          URI for the Kea Control Agent (Management API endpoint).
+        :param dhcp_version: IP version served by Kea DHCP server. Currently,
+                             only IPv4 DHCP servers are supported.
+        :param timeout:      How long to wait for a http response from
+                             the Kea Control Agent before timing out.
         """
-        super()
-        self._rest_uri = (
-            uri  # TODO: Potential secrets are sent over HTTP, should enforce TLS!
-        )
-        self._dhcp_version = dhcp_version
+        if not uri.startswith("https://"):
+            _logger.warning("Kea Management API client configured to use non-HTTPS")
+
+        self._rest_uri: str = uri
+        self._dhcp_version: int = dhcp_version
         self._dhcp_config: Optional[dict] = None
-        self._timeout = timeout
-        self._access_time = datetime.now().timestamp()
+        self._timeout: int = timeout
         self._session: Optional[Session] = None
 
         if dhcp_version == 4:
-            self._kea_metric_keys = {
-                DhcpMetricKey.TOTAL: "total-addresses",
-                DhcpMetricKey.ASSIGNED: "assigned-addresses",
-            }
+            self._api_namings = (
+                ("total", "total-addresses"),
+                ("assigned", "assigned-addresses"),
+                ("declined", "declined-addresses"),
+            )
         else:
             raise ValueError(f"DHCPv{dhcp_version} is not supported")
 
-    def fetch_metrics(self) -> list[DhcpMetric]:
+    def fetch_metrics(self) -> list[_Metric]:
         """
         Fetches and returns a list containing the most recent DHCP
         metrics for each subnet managed by the Kea DHCP server. For
-        each subnet and DhcpMetric-key combination, there is at least
+        each subnet and metric-name combination, there is at least
         one corresponding metric in the returned list if no errors
         occur.
 
@@ -117,92 +119,89 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         one or more of the requests for some metric(s), these metrics
         will be missing in the returned list, but a list is still
         succesfully returned. Other errors while requesting metrics
-        will cause a fitting subclass of KeaException to be raised:
+        will cause a fitting subclass of KeaException to be raised.
+
+        Exceptions raised:
 
         Communication errors (HTTP errors, JSON errors, access control
-        errors) causes a KeaException that is reraised from the
-        specific communication error to be raised.
+        errors, unexpected responses) causes a KeaException to be raised.
 
-        If the Kea Control Agent doesn't support the 'config-get' and
-        'statistic-get' commands, then a KeaUnsupported exception is
-        raised.
-
-        General errors reported by the Kea Control Agent causes a
-        KeaError to be raised.
+        If the Kea Control Agent doesn't support the bare-minimum set of
+        commands this client needs for fetching metrics, then a KeaUnsupported
+        exception is raised.
         """
         self._session = Session()
-        self._access_time = datetime.now().timestamp()
-        metrics: list[DhcpMetric] = []
+        start_time = datetime.now().timestamp()
 
         config = self._fetch_config()
-        subnets = _subnets_of_config(config, self._dhcp_version)
+        subnets = self._subnets_of_config(config)
 
+        metrics: list[_Metric] = []
         for subnet in subnets:
-            total_addresses = self._fetch_subnet_metric(
-                subnet, "total"
-            )
-            assigned_addresses = self._fetch_subnet_metric(
-                subnet, "assigned"
-            )
-            if total_addresses is not None:
-                metrics.append(total_addresses)
-            if assigned_addresses is not None:
-                metrics.append(assigned_addresses)
+            for metric_name, api_naming in self._api_namings:
+                value = self._fetch_metric_value(subnet, api_naming)
+                if value is not None:
+                    metric = _Metric(start_time, subnet.prefix, metric_name, value)
+                    metrics.append(metric)
 
-        newest_subnets = _subnets_of_config(
-            self._fetch_config(), self._dhcp_version
-        )
-        if sorted(subnets) != sorted(newest_subnets):
+
+        maybe_updated_config = self._fetch_config()
+        maybe_updated_subnets = self._subnets_of_config(maybe_updated_config)
+        if sorted(subnets) != sorted(maybe_updated_subnets):
             _logger.warning(
-                "Subnet configuration was modified during DHCP metric fetching, "
-                "this may cause metric data being associated with wrong subnet."
+                "Server's subnet configuration was modified during fetching of DHCP "
+                "metrics. This may cause metric data being associated with wrong subnet."
             )
 
         self._session.close()
         self._session = None
+        end_time = datetime.now().timestamp()
+        _logger.info(
+            "Fetched %d metrics for %d subnets in %f seconds from %s",
+            len(metrics),
+            len(subnets),
+            end_time - start_time,
+            self._rest_uri,
+        )
         return metrics
 
-    def _fetch_subnet_metric(
-        self, subnet: Subnet, metric_key: DhcpMetricKey
-    ) -> Optional[DhcpMetric]:
+    def _fetch_metric_value(
+            self, subnet: _Subnet, api_metric_name: str
+    ) -> Optional[int]:
         """
-        Return the most recent metric recorded by the Kea DHCP server for the
-        given subnet with the given metric_key
+        Return the most recent metric value recorded by the Kea DHCP server for
+        the given subnet with the given api_metric_name
         """
-        kea_metric_name = self._get_kea_metric_name(subnet, metric_key)
+        full_name = f"subnet[{subnet.id}].{api_metric_name}"
         try:
-            response = self._send_query("statistic-get", name=kea_metric_name)
+            response = self._send_query("statistic-get", name=full_name)
         except KeaEmpty:
             # This may occur if the subnet we query have been removed from the
             # DHCP server's configuration at time of request
             response = {}
 
-        kea_metric_samples = response.get("arguments", {}).get(kea_metric_name, [])
+        samples = response.get("arguments", {}).get(full_name, [])
 
-        if len(kea_metric_samples) == 0:
+        if len(samples) == 0:
             _logger.info(
-                "No samples found for metric '%s' in subnet '%s'",
-                metric_key,
+                "No samples found when querying for '%s' in subnet '%s'",
+                api_metric_name,
                 subnet.prefix,
             )
             return None
 
         # The Kea server may be configured to keep track of the N most recent
-        # metric samples for some N>=1, but we only care about the most recent
+        # metric values for some N>=1, but we only care about the most recent
         # one. The Kea 2.6 Management API documentation does not specify any
         # explicit ordering of the returned samples, but ISC's official Kea
-        # Management API consumer, Stork, relies on the fact that the first
+        # Management API client, Stork, relies on the fact that the first
         # sample in the returned list is the most recent^[0], so for simplicity's
         # sake so will we.
         #
         # [0]: https://gitlab.isc.org/isc-projects/stork/-/blob/4193375c01e3ec0b3d862166e2329d76e686d16d/backend/server/apps/kea/rps.go#L223-227
-        value, timestring = kea_metric_samples[0]
-        return DhcpMetric(
-            subnet.prefix,
-            metric_key,
-            self._access_time,
-            value,
-        )
+        value, timestring = samples[0]
+        return value
+
 
     def _fetch_config(self) -> dict:
         """
@@ -240,19 +239,18 @@ class KeaDhcpMetricSource(DhcpMetricSource):
 
     def _send_query(self, command: str, **kwargs) -> dict:
         """
-        Returns the response from the Kea Control Agent to the query
-        with command `command` instructed towards the Kea DHCP server.
-        Additional keyword arguments to this function will be passed
-        as arguments to the command.
+        Returns the Management API response from the Kea Control Agent to the
+        query with command `command` instructed towards the Kea DHCP server.
+        Additional keyword arguments to this function will be passed as
+        arguments to the command.
 
-        Communication errors (HTTP errors, JSON errors, access control
-        errors, unrecognized json response formats) causes a
-        KeaException to be raised. If possible, it is reraised from a
-        more descriptive error such as an HTTPError.
+        Communication errors (HTTP errors, JSON errors, access control errors,
+        unrecognized json response formats) causes a KeaException to be
+        raised. If possible, it is reraised from a more descriptive error such
+        as an HTTPError.
 
-        Valid Kea Control Agent responses that indicate a failure on
-        the server-end causes a descriptive subclass of KeaException
-        to be raised.
+        Valid Kea Control Agent responses that indicate a failure on the
+        server-end causes a descriptive subclass of KeaException to be raised.
         """
         log_summary = {
             "Request status": "Sending request to Kea Control Agent",
@@ -325,45 +323,36 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         log_summary["Response"] = f"Kea status {status}: {description}"
         _logger.debug(log_summary)
 
-        if status == KeaStatus.SUCCESS:
+        if status == _KeaStatus.SUCCESS:
             return response
-        elif status == KeaStatus.UNSUPPORTED:
+        elif status == _KeaStatus.UNSUPPORTED:
             raise KeaUnsupported(details=log_summary)
-        elif status == KeaStatus.EMPTY:
+        elif status == _KeaStatus.EMPTY:
             raise KeaEmpty(details=log_summary)
-        elif status == KeaStatus.ERROR:
+        elif status == _KeaStatus.ERROR:
             raise KeaError(details=log_summary)
-        elif status == KeaStatus.CONFLICT:
+        elif status == _KeaStatus.CONFLICT:
             raise KeaConflict(details=log_summary)
         raise KeaException("Kea returned an unkown status response", log_summary)
 
-    def _get_kea_metric_name(self, subnet: Subnet, metric_key: DhcpMetricKey) -> str:
+    def _subnets_of_config(self, config: dict) -> list[_Subnet]:
         """
-        Returns the argument recognized by Kea to query the metric with the
-        given metric_key for the given subnet
+        Returns a list containing one (subnet-id, subnet-prefix) tuple per
+        subnet listed in the Kea DHCP configuration `config`.
         """
-        kea_metric_key = self._kea_metric_keys[metric_key]
-        return f"subnet[{subnet.id}].{kea_metric_key}"
-
-
-def _subnets_of_config(config: dict, ip_version: int) -> list[Subnet]:
-    """
-    Returns a list containing one (subnet-id, subnet-prefix) tuple per
-    subnet listed in the Kea DHCP configuration `config`.
-    """
-    subnets: list[Subnet] = []
-    subnetkey = f"subnet{ip_version}"
-    for subnet in chain.from_iterable(
-        [config.get(subnetkey, [])]
-        + [network.get(subnetkey, []) for network in config.get("shared-networks", [])]
-    ):
-        subnet_id = subnet.get("id", None)
-        netprefix = subnet.get("subnet", None)
-        if subnet_id is None or netprefix is None:
-            _logger.warning("id and/or prefix missing from a subnet's configuration")
-            continue
-        subnets.append(Subnet(subnet_id, IP(netprefix)))
-    return subnets
+        subnets: list[_Subnet] = []
+        subnetkey = f"subnet{self._dhcp_version}"
+        for subnet in chain.from_iterable(
+            [config.get(subnetkey, [])]
+            + [network.get(subnetkey, []) for network in config.get("shared-networks", [])]
+        ):
+            subnet_id = subnet.get("id", None)
+            netprefix = subnet.get("subnet", None)
+            if subnet_id is None or netprefix is None:
+                _logger.warning("id and/or prefix missing from a subnet's configuration")
+                continue
+            subnets.append(_Subnet(subnet_id, IP(netprefix)))
+        return subnets
 
 
 class KeaException(GeneralException):
@@ -407,7 +396,7 @@ class KeaConflict(KeaException):
     """Kea failed to apply requested changes due to conflicts with its server state"""
 
 
-class KeaStatus(IntEnum):
+class _KeaStatus(IntEnum):
     """Status of a response sent from a Kea Control Agent"""
 
     SUCCESS = 0
