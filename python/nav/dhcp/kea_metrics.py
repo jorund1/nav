@@ -103,6 +103,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
             }
         else:
             raise ValueError(f"DHCPv{dhcp_version} is not supported")
+        self._session = None
 
     def fetch_metrics(self) -> list[DhcpMetric]:
         """
@@ -129,38 +130,40 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         General errors reported by the Kea Control Agent causes a
         KeaError to be raised.
         """
+        self._session = Session()
         self._access_time = datetime.now().timestamp()
         metrics: list[DhcpMetric] = []
 
-        with requests.Session() as session:
-            config = self._fetch_config(session)
-            subnets = _subnets_of_config(config, self._dhcp_version)
+        config = self._fetch_config()
+        subnets = _subnets_of_config(config, self._dhcp_version)
 
-            for subnet in subnets:
-                total_addresses = self._fetch_subnet_metric(
-                    subnet, DhcpMetricKey.TOTAL, session
-                )
-                assigned_addresses = self._fetch_subnet_metric(
-                    subnet, DhcpMetricKey.ASSIGNED, session
-                )
-                if total_addresses is not None:
-                    metrics.append(total_addresses)
-                if assigned_addresses is not None:
-                    metrics.append(assigned_addresses)
-
-            newest_subnets = _subnets_of_config(
-                self._fetch_config(session), self._dhcp_version
+        for subnet in subnets:
+            total_addresses = self._fetch_subnet_metric(
+                subnet, "total"
             )
-            if sorted(subnets) != sorted(newest_subnets):
-                _logger.warning(
-                    "Subnet configuration was modified during DHCP metric fetching, "
-                    "this may cause metric data being associated with wrong subnet."
-                )
+            assigned_addresses = self._fetch_subnet_metric(
+                subnet, "assigned"
+            )
+            if total_addresses is not None:
+                metrics.append(total_addresses)
+            if assigned_addresses is not None:
+                metrics.append(assigned_addresses)
 
+        newest_subnets = _subnets_of_config(
+            self._fetch_config(), self._dhcp_version
+        )
+        if sorted(subnets) != sorted(newest_subnets):
+            _logger.warning(
+                "Subnet configuration was modified during DHCP metric fetching, "
+                "this may cause metric data being associated with wrong subnet."
+            )
+
+        self._session.close()
+        self._session = None
         return metrics
 
     def _fetch_subnet_metric(
-        self, subnet: Subnet, metric_key: DhcpMetricKey, session: requests.Session
+        self, subnet: Subnet, metric_key: DhcpMetricKey
     ) -> Optional[DhcpMetric]:
         """
         Return the most recent metric recorded by the Kea DHCP server for the
@@ -168,7 +171,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         """
         kea_metric_name = self._get_kea_metric_name(subnet, metric_key)
         try:
-            response = self._send_query(session, "statistic-get", name=kea_metric_name)
+            response = self._send_query("statistic-get", name=kea_metric_name)
         except KeaEmpty:
             # This may occur if the subnet we query have been removed from the
             # DHCP server's configuration at time of request
@@ -201,7 +204,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
             value,
         )
 
-    def _fetch_config(self, session: requests.Session) -> dict:
+    def _fetch_config(self) -> dict:
         """
         Returns the current config of the Kea DHCP server that the Kea
         Control Agent controls.
@@ -209,9 +212,9 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         if (
             self._dhcp_config is None
             or (dhcp_confighash := self._dhcp_config.get("hash", None)) is None
-            or self._fetch_config_hash(session) != dhcp_confighash
+            or self._fetch_config_hash() != dhcp_confighash
         ):
-            response = self._send_query(session, "config-get")
+            response = self._send_query("config-get")
             try:
                 self._dhcp_config = response["arguments"][f"Dhcp{self._dhcp_version}"]
             except KeyError as err:
@@ -220,14 +223,14 @@ class KeaDhcpMetricSource(DhcpMetricSource):
                 ) from err
         return self._dhcp_config or {}
 
-    def _fetch_config_hash(self, session: requests.Session) -> Optional[str]:
+    def _fetch_config_hash(self) -> Optional[str]:
         """
         Returns the hash of the current config of the Kea DHCP server
         that the Kea Control Agent controls.
         """
         try:
             return (
-                self._send_query(session, "config-hash-get")
+                self._send_query("config-hash-get")
                 .get("arguments", {})
                 .get("hash", None)
             )
@@ -235,7 +238,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
             _logger.debug(str(err))
             return None
 
-    def _send_query(self, session: requests.Session, command: str, **kwargs) -> dict:
+    def _send_query(self, command: str, **kwargs) -> dict:
         """
         Returns the response from the Kea Control Agent to the query
         with command `command` instructed towards the Kea DHCP server.
@@ -267,7 +270,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         )
 
         try:
-            responses = session.post(
+            responses = self._session.post(
                 self._rest_uri,
                 data=post_data,
                 timeout=self._timeout,
