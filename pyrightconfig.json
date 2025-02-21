@@ -1,0 +1,10 @@
+{
+  "executionEnvironments": [
+    {
+      "root": "tests",
+      "extraPaths": [
+        "python"
+      ]
+    },
+  ]
+}
