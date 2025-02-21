@@ -36,7 +36,7 @@ from typing import Optional, Union
 
 from IPy import IP
 import requests
-from requests import RequestException, JSONDecodeError
+from requests import RequestException, JSONDecodeError, Session
 
 from nav.dhcp.generic_metrics import DhcpMetric, DhcpMetricKey, DhcpMetricSource
 from nav.errors import GeneralException
