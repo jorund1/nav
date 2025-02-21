@@ -12,6 +12,11 @@ from datetime import datetime, timedelta
 
 
 class TestRecognizableAPIResponses:
+    """
+    Tests the various types of responses from the Kea Management API that the
+    client should expect and handle appropiately.
+    """
+
     def test_fetch_metrics_should_return_correct_metrics(
         self, valid_dhcp4, responsequeue
     ):
@@ -29,7 +34,7 @@ class TestRecognizableAPIResponses:
         def clean(metrics):
             """
             Set metric timestamps to zero, because we do not care to compare the
-            time a metric was fetched into NAV.
+            time a metric was fetched into NAV in this test.
             """
             return [replace(metric, timestamp=0) for metric in metrics]
 
@@ -355,6 +360,12 @@ def valid_dhcp4():
             239,
         ),
         _Metric(
+            datetime.fromisoformat("2024-07-03T16:13:59.401058+00:00").timestamp(),
+            IP("192.0.1.0/24"),
+            "declined",
+            0,
+        ),
+        _Metric(
             datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             IP("192.0.2.0/24"),
             "assigned",
@@ -365,6 +376,12 @@ def valid_dhcp4():
             IP("192.0.2.0/24"),
             "total",
             240,
+        ),
+        _Metric(
+            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
+            IP("192.0.2.0/24"),
+            "declined",
+            1,
         ),
         _Metric(
             datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
@@ -379,6 +396,12 @@ def valid_dhcp4():
             241,
         ),
         _Metric(
+            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
+            IP("192.0.3.0/24"),
+            "declined",
+            0,
+        ),
+        _Metric(
             datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             IP("192.0.4.0/24"),
             "assigned",
@@ -391,6 +414,12 @@ def valid_dhcp4():
             242,
         ),
         _Metric(
+            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
+            IP("192.0.4.0/24"),
+            "declined",
+            1,
+        ),
+        _Metric(
             datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
             IP("192.0.5.0/24"),
             "assigned",
@@ -401,6 +430,12 @@ def valid_dhcp4():
             IP("192.0.5.0/24"),
             "total",
             243,
+        ),
+        _Metric(
+            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
+            IP("192.0.5.0/24"),
+            "declined",
+            1,
         ),
     ]
 
