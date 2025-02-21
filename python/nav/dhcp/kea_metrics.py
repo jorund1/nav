@@ -95,6 +95,7 @@ class KeaDhcpMetricSource(DhcpMetricSource):
         self._dhcp_config: Optional[dict] = None
         self._timeout = timeout
         self._access_time = datetime.now().timestamp()
+        self._session: Optional[Session] = None
 
         if dhcp_version == 4:
             self._kea_metric_keys = {
@@ -103,7 +104,6 @@ class KeaDhcpMetricSource(DhcpMetricSource):
             }
         else:
             raise ValueError(f"DHCPv{dhcp_version} is not supported")
-        self._session = None
 
     def fetch_metrics(self) -> list[DhcpMetric]:
         """
