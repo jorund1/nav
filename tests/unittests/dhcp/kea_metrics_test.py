@@ -11,7 +11,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 
-class TestRecognizeableResponse:
+class TestRecognizableAPIResponses:
     def test_fetch_metrics_should_return_correct_metrics(
         self, valid_dhcp4, responsequeue
     ):
@@ -22,9 +22,9 @@ class TestRecognizeableResponse:
 
         config, statistics, expected_metrics = valid_dhcp4
         responsequeue.autofill("dhcp4", config=config, statistics=statistics)
-        source = Client("http://example.org/")
+        client = Client("http://example.org/")
 
-        actual_metrics = source.fetch_metrics()
+        actual_metrics = client.fetch_metrics()
 
         def clean(metrics):
             """
@@ -47,9 +47,9 @@ class TestRecognizeableResponse:
 
         config, statistics, expected_metrics = valid_dhcp4
         responsequeue.autofill("dhcp4", config=config, statistics=statistics)
-        source = Client("http://example.org/")
+        client = Client("http://example.org/")
 
-        actual_metrics = source.fetch_metrics()
+        actual_metrics = client.fetch_metrics()
         assert len(actual_metrics) > 0
         for metric in actual_metrics:
             assert (
@@ -73,8 +73,8 @@ class TestRecognizeableResponse:
         config, statistics, _ = valid_dhcp4
         responsequeue.autofill("dhcp4", config=None, statistics=statistics)
         responsequeue.add("config-get", lambda *a, **ka: kearesponse({"Dhcp4": {}}))
-        source = Client("http://example.org/")
-        assert list(source.fetch_metrics()) == []
+        client = Client("http://example.org/")
+        assert list(client.fetch_metrics()) == []
 
     def test_fetch_metrics_should_handle_empty_statistic_in_api_statistics_response(
         self, valid_dhcp4, responsequeue
@@ -92,8 +92,8 @@ class TestRecognizeableResponse:
                 {requestarguments["name"]: []}
             ),
         )
-        source = Client("http://example.org/")
-        assert list(source.fetch_metrics()) == []
+        client = Client("http://example.org/")
+        assert list(client.fetch_metrics()) == []
 
     def test_fetch_metrics_should_handle_unsupported_statistic_in_statistics_response(
         self, valid_dhcp4, responsequeue
@@ -116,8 +116,8 @@ class TestRecognizeableResponse:
         config, statistics, _ = valid_dhcp4
         responsequeue.autofill("dhcp4", config=config, statistics=None)
         responsequeue.add("statistic-get", lambda *a, **ka: kearesponse({}))
-        source = Client("http://example.org/")
-        assert list(source.fetch_metrics()) == []
+        client = Client("http://example.org/")
+        assert list(client.fetch_metrics()) == []
 
     def test_fetch_metrics_should_raise_an_exception_on_http_error_response(
         self, valid_dhcp4, responsequeue
@@ -135,10 +135,10 @@ class TestRecognizeableResponse:
             attrs={"status_code": 403},
         )
 
-        source = Client("http://example.org/")
+        client = Client("http://example.org/")
 
         with pytest.raises(KeaException):
-            source.fetch_metrics()
+            client.fetch_metrics()
 
     @pytest.mark.parametrize(
         "status", [status for status in _KeaStatus if status != _KeaStatus.SUCCESS]
@@ -153,9 +153,9 @@ class TestRecognizeableResponse:
         config, statistics, _ = valid_dhcp4
         responsequeue.autofill("dhcp4", config=None, statistics=statistics)
         responsequeue.add("config-get", kearesponse(config, status=status))
-        source = Client("http://example.org/")
+        client = Client("http://example.org/")
         with pytest.raises(KeaException):
-            source.fetch_metrics()
+            client.fetch_metrics()
 
     @pytest.mark.parametrize(
         "status", [status for status in _KeaStatus if status != _KeaStatus.SUCCESS]
@@ -170,9 +170,9 @@ class TestRecognizeableResponse:
         config, statistics, _ = valid_dhcp4
         responsequeue.autofill("dhcp4", config=config, statistics=None)
         responsequeue.add("statistic-get", kearesponse(statistics, status=status))
-        source = Client("http://example.org/")
+        client = Client("http://example.org/")
         with pytest.raises(KeaException):
-            source.fetch_metrics()
+            client.fetch_metrics()
 
     @pytest.mark.parametrize(
         "status",
@@ -192,17 +192,17 @@ class TestRecognizeableResponse:
         """
         foohash = "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"
         config, statistics, _ = valid_dhcp4
-        source = Client("http://example.org/")
+        client = Client("http://example.org/")
         config["Dhcp4"]["hash"] = foohash
         responsequeue.autofill("dhcp4", config=config, statistics=statistics)
         responsequeue.add(
             "config-hash-get", kearesponse({"hash": foohash}, status=status)
         )
         with pytest.raises(KeaException):
-            source.fetch_metrics()
+            client.fetch_metrics()
 
 
-class TestUnrecognizableResponse:
+class TestUnrecognizableAPIResponses:
     """
     If Kea responds in an unrecognizable way, we should always fail loudly,
     because chances are either the host we're sending requests to is not a Kea
@@ -216,34 +216,34 @@ class TestUnrecognizableResponse:
         self, valid_dhcp4, responsequeue
     ):
         config, statistics, _ = valid_dhcp4
-        source = Client("http://example.org/")
+        client = Client("http://example.org/")
 
         responsequeue.autofill("dhcp4", config=None, statistics=statistics)
         responsequeue.add("config-get", self.invalid_response)
         with pytest.raises(KeaException):
-            source.fetch_metrics()
+            client.fetch_metrics()
 
     def test_fetch_metrics_should_raise_an_exception_on_unrecognizable_statistic_response_from_api(
         self, valid_dhcp4, responsequeue
     ):
         config, statistics, _ = valid_dhcp4
-        source = Client("http://example.org/")
+        client = Client("http://example.org/")
 
         responsequeue.autofill("dhcp4", config=config, statistics=None)
         responsequeue.add("statistic-get", self.invalid_response)
         with pytest.raises(KeaException):
-            source.fetch_metrics()
+            client.fetch_metrics()
 
     def test_fetch_metrics_should_raise_an_exception_on_unrecognizable_config_hash_response_from_api(
         self, valid_dhcp4, responsequeue
     ):
         config, statistics, _ = valid_dhcp4
-        source = Client("http://example.org/")
+        client = Client("http://example.org/")
         config["Dhcp4"]["hash"] = "foo"
         responsequeue.autofill("dhcp4", config=config, statistics=statistics)
         responsequeue.add("config-hash-get", self.invalid_response)
         with pytest.raises(KeaException):
-            source.fetch_metrics()
+            client.fetch_metrics()
 
 
 @pytest.fixture
@@ -534,7 +534,7 @@ def responsequeue(monkeypatch):
             def config_get_response(arguments, service):
                 assert service == [
                     expected_service
-                ], f"KeaDhcpSource for service [{expected_service}] should not send requests to {service}"
+                ], f"API Client for service [{expected_service}] should not send requests to {service}"
                 return kearesponse(config)
 
             add_command_response("config-get", config_get_response, attrs)
@@ -544,7 +544,7 @@ def responsequeue(monkeypatch):
             def statistic_get_response(arguments, service):
                 assert service == [
                     expected_service
-                ], f"KeaDhcpSource for service [{expected_service}] should not send requests to {service}"
+                ], f"API Client for service [{expected_service}] should not send requests to {service}"
                 return kearesponse({arguments["name"]: statistics[arguments["name"]]})
 
             add_command_response("statistic-get", statistic_get_response, attrs)
