@@ -9,8 +9,8 @@ from nav.metrics.templates import metric_path_for_subnet_dhcp
 
 _logger = logging.getLogger("nav.dhcpmetrics")
 
-LOGFILE = "keadhcp.log"
-CONFIGFILE = "keadhcp.conf"
+LOGFILE = "dhcpmetrics.log"
+CONFIGFILE = "dhcpmetrics.conf"
 
 
 def main():
