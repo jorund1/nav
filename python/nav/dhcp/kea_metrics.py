@@ -271,7 +271,7 @@ class Client:
                 timeout=self._timeout,
                 headers={"Content-Type": "application/json"},
             )
-            log_summary["Client status"] = "Received response from Kea Control Agent"
+            log_summary["client status"] = "Received response from Kea Control Agent"
             log_summary["HTTP status"] = (
                 f"HTTP {responses.status_code}: {responses.reason}"
             )
@@ -303,7 +303,7 @@ class Client:
             ):
                 # If the response is a JSON object it's a specific error message
                 # See https://kea.readthedocs.io/en/kea-2.6.0/arm/ctrl-channel.html#control-agent-command-response-format
-                log_summary["Response"] = f"{responses['result']}: {responses['text']}"
+                log_summary["response"] = f"{responses['result']}: {responses['text']}"
                 raise KeaException(
                     "Likely authentication or authorization error", log_summary
                 )
@@ -317,7 +317,7 @@ class Client:
         status = response["result"]
         description = response.get("text", "(no description)")
 
-        log_summary["Response"] = f"Kea status {status}: {description}"
+        log_summary["response"] = f"Kea status {status}: {description}"
         _logger.debug(log_summary)
 
         if status == _KeaStatus.SUCCESS:
@@ -367,15 +367,14 @@ class KeaException(GeneralException):
         self.details = details
 
     def __str__(self) -> str:
-        message = ""
-        details = ""
         message = f"{self.message}" or self.__doc__ or ""
+        details = ""
         if self.details:
-            details = "\nError details:\n"
-            details += "\n".join(
-                f"\t{label} was '{info}'" for label, info in self.details.items()
+            details = ", ".join(
+                f"{label} was '{info}'" for label, info in self.details.items()
             )
-        return "".join([message, details])
+            details = f" ({details})"
+        return f"{message}{details}"
 
 
 class KeaError(KeaException):
