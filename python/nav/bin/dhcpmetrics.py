@@ -30,8 +30,7 @@ def collect_metrics(config):
         api_client = Client(uri, dhcp_version=dhcp_version, timeout=timeout)
         api_clients.append(api_client)
 
-    # TODO: use parallel threads
-    graphite_metrics = []
+    metrics = []
     for client in api_clients:
         try:
             for metric in client.fetch_metrics():
@@ -39,10 +38,10 @@ def collect_metrics(config):
                     metric.subnet_prefix, metric.name
                 )
                 datapoint = (metric.timestamp, metric.value)
-                graphite_metrics.append((metric_path, datapoint))
+                metrics.append((metric_path, datapoint))
         except KeaException as err:
             _logger.error(str(err))
 
-    carbon.send_metrics(graphite_metrics)
+    carbon.send_metrics(metrics)
 
     _logger.info('--> Metric collection done <--')

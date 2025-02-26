@@ -187,16 +187,31 @@ def metric_path_for_multicast_usage(group, sysname):
     )
 
 
-def metric_component_for_prefix_bits(prefix):
-    ip = IPy.IP(prefix)
-    return bits=ip.strBin()[0:ip.prefixlen()]
-
-
 def metric_path_for_subnet_dhcp(subnet_prefix, metric_name):
-    tmpl = "nav.dhcp.subnet.{ip_version}.{prefix_bits}.{metric_name}"
+    tmpl = "nav.dhcp.subnet.{subnet_prefix}.{metric_name};ip_version={ip_version};prefix_bits={prefix_bits}"
     ip = IPy.IP(subnet_prefix)
     return tmpl.format(
-        ip_version=ip.version(),
-        prefix_bits=metric_component_for_prefix_bits(subnet_prefix),
+        subnet_prefix=escape_metric_name(ip.strNormal()),
         metric_name=metric_name,
+        ip_version=ip.version(),
+        prefix_bits=ip.strBin()[0:ip.prefixlen()],
     )
+
+def overlapped_subnet_dhcp_series(subnet_prefix, metric_name):
+    tmpl = "seriesByTag('name=nav.dhcp.subnet.*.{metric_name}', 'ip_version={ip_version}', 'prefix_bits=~{prefix_bits}.*')"
+    ip = IPy.IP(subnet_prefix)
+    return tmpl.format(
+        metric_name=metric_name,
+        ip_version=ip.version(),
+        prefix_bits=ip.strBin()[0:ip.prefixlen()],
+    )
+
+
+#    The significant bits of a prefix. For the prefix 192.0.2.0/24, it is
+#    '110000000000000000000010' and for the prefix 128.0.0.0/8, it is '10000000'.
+#
+#    Suppose we're working with a set of series that are tagged with ip_version
+#    and prefix_bits. To find the series that are overlapped by 128.0.0.0/8
+#    in the graphite database, this query suffices:
+#
+#    seriesByTag('ip_version=4', 'prefix_bits=~10000000.*')
