@@ -51,6 +51,7 @@ from nav.metrics.templates import (
     metric_path_for_sensor,
     metric_path_for_prefix,
     metric_path_for_power,
+    overlapped_subnet_dhcp_series,
 )
 import nav.natsort
 from nav.models.fields import DateTimeInfinityField, VarcharField, PointField
@@ -1535,9 +1536,14 @@ class Vlan(models.Model):
         """Fetches the graph urls for graphing this vlan"""
         return [url for url in [self.get_graph_url(f) for f in [4, 6]] if url]
 
-    def get_graph_url(self, family=4):
+    def get_graph_url(self, family=4, data_origin="snmp"):
         """Creates a graph url for the given family with all prefixes stacked"""
         assert family in [4, 6]
+        assert data_origin in ["snmp", "dhcp"]
+
+        family = 4
+        data_origin = "dhcp"
+
         prefixes = self.prefixes.extra(where=["family(netaddr)=%s" % family])
         # Put metainformation in the alias so that Rickshaw can pick it up and
         # know how to draw the series.
@@ -1548,8 +1554,18 @@ class Vlan(models.Model):
             )
             for prefix in prefixes
         ]
+        # TODO: don't above code if data_origin == "dhcp"
+        if data_origin == "dhcp":
+            series = [
+                "alias(sumSeries({}), 'renderer=area;;{}')".format(
+                    overlapped_subnet_dhcp_series(prefix.net_address, "assigned"),
+                    prefix.net_address,
+                )
+                for prefix in prefixes
+            ]
+
         if series:
-            if family == 4:
+            if family == 4 and data_origin == "snmp":
                 series.append(
                     "alias(sumSeries(%s), 'Max addresses')"
                     % ",".join(
@@ -1559,10 +1575,22 @@ class Vlan(models.Model):
                         ]
                     )
                 )
+            elif family == 4 and data_origin == "dhcp":
+                series.append(
+                    "alias(sumSeries({}), 'Max addresses')".format(
+                        ",".join(
+                            [
+                                overlapped_subnet_dhcp_series(prefix.net_address, "total")
+                                for prefix in prefixes
+                            ]
+                        ),
+                    ),
+                )
+
             return get_simple_graph_url(
                 series,
-                title="Total IPv{} addresses on vlan {} - stacked".format(
-                    family, str(self)
+                title="Total IPv{} addresses on vlan {} ({} data) - stacked".format(
+                    family, str(self), data_origin
                 ),
                 format='json',
             )
