@@ -216,3 +216,103 @@ def overlapped_subnet_dhcp_series(subnet_prefix, metric_name):
 #    in the graphite database, this query suffices:
 #
 #    seriesByTag('ip_version=4', 'prefix_bits=~10000000.*')
+
+
+def range_glob(low, high):
+    boths = []
+    highs = []
+    lows = []
+    nones = []
+
+    upper_digit = high % 10
+    lower_digit = low % 10
+
+    first_step = (
+        (lower_digit, upper_digit) if lower_digit <= upper_digit else None,
+        (0, lower_digit-1) if 0 <= lower_digit-1 <= upper_digit else (0, upper_digit) if 0 <= upper_digit < lower_digit else None,
+        (upper_digit+1, 9) if 9 >= upper_digit+1 >= lower_digit else (lower_digit, 9) if 9 >=  lower_digit > upper_digit else None,
+        (upper_digit+1, lower_digit-1) if upper_digit+1 <= lower_digit else None,
+    )
+
+    nop = (None, None, None, None)
+
+    boths.append(first_step)
+    highs.append(nop)
+    lows.append(nop)
+    nones.append(nop)
+
+    high //= 10
+    low //= 10
+
+    while high and low:
+        upper_digit = high % 10
+        lower_digit = low % 10
+
+        step_from_boths = (
+            (lower_digit, upper_digit) if lower_digit <= upper_digit else None,
+            (0, lower_digit-1) if 0 <= lower_digit-1 <= upper_digit else (0, upper_digit) if 0 <= upper_digit < lower_digit else None,
+            (upper_digit+1, 9) if 9 >= upper_digit+1 >= lower_digit else (lower_digit, 9) if 9 >=  lower_digit > upper_digit else None,
+            (upper_digit+1, lower_digit-1) if upper_digit+1 <= lower_digit else None,
+        )
+
+        step_from_highs = (
+            (lower_digit+1, upper_digit) if lower_digit+1 <= upper_digit else None,
+            (0, lower_digit) if 0 <= lower_digit <= upper_digit else (0, upper_digit) if 0 <= upper_digit <= lower_digit else None,
+            (upper_digit+1, 9) if 9 >= upper_digit+1 >= lower_digit+1 else (lower_digit+1, 9) if 9 >= lower_digit+1 > upper_digit+1 else None,
+            (upper_digit+1, lower_digit) if upper_digit+1 <= lower_digit else None,
+        )
+        step_from_lows = (
+            (lower_digit, upper_digit-1) if lower_digit <= upper_digit-1 else None,
+            (0, lower_digit-1) if 0 <= lower_digit-1 <= upper_digit else (0, upper_digit-1) if 0 <= upper_digit-1 < lower_digit else None,
+            (upper_digit, 9) if 9 >= upper_digit >= lower_digit else (lower_digit, 9) if 9 >= lower_digit >= upper_digit else None,
+            (upper_digit, lower_digit-1) if upper_digit <= lower_digit-1 else None,
+        )
+        step_from_nones = (
+            (lower_digit+1, upper_digit-1) if lower_digit+1 <= upper_digit-1 else None,
+            (0, lower_digit) if 0 <= lower_digit <= upper_digit-1 else (0, upper_digit-1) if 0 <= upper_digit-1 < lower_digit else None,
+            (upper_digit, 9) if 9 >= upper_digit >= lower_digit+1 else (lower_digit+1, 9) if 9 >= lower_digit+1 > upper_digit else None,
+            (upper_digit, lower_digit) if upper_digit <= lower_digit else None,
+        )
+
+        boths.append(step_from_boths)
+        highs.append(step_from_highs)
+        lows.append(step_from_lows)
+        nones.append(step_from_nones)
+
+        high //= 10
+        low //= 10
+
+    assert not (high or low), "'high' and 'low' must have equal amount of digits"
+
+    store = {}
+    table = [boths, highs, lows, nones]
+
+    def get_paths_to(row, col, table, store):
+        paths = []
+        store[(row, col)] = paths
+        prev_col = col-1
+        if prev_col < 0:
+            paths.append([])
+            return
+        for search_row in range(len(table)):
+            if (transition_cond := table[search_row][prev_col][row]) is not None:
+                if (search_row, prev_col) not in store:
+                    get_paths_to(search_row, prev_col, table, store)
+                paths.extend(conds + [transition_cond] for conds in store[(search_row, prev_col)])
+
+    from pprint import pprint
+    get_paths_to(0, len(table[0]), table, store)
+    pprint(store[(0, len(table[0]))])
+
+    # n_rows = len(table)
+    # n_cols = len(table[0])
+    # stack = [(0, n_cols)] if n_cols > 0 else []
+    # while len(stack) > 0:
+    #     current_row, current_col = pos = stack.pop()
+    #     dfs_statuses[pos] = []
+    #     preceeding_col = 0
+    #     for row in range(n_rows):
+    #         preceeding_pos = (row, preceeding_col)
+    #         if table[row][preceeding_col][current_row] is not None:
+    #             if preceeding_pos in dfs_statuses:
+    #                 stack.append(preceeding_pos)
