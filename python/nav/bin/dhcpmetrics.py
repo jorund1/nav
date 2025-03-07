@@ -15,11 +15,25 @@ CONFIGFILE = "dhcpmetrics.conf"
 
 def main():
     init_generic_logging(logfile=LOGFILE)
+    args = parse_args()
     config = getconfig(CONFIGFILE)
-    collect_metrics(config)
+    collect_metrics(config, args)
+
+def parse_args():
+    """Builds an ArgumentParser and returns parsed program arguments"""
+    parser = argparse.ArgumentParser(
+        description="Collects DHCP metrics from servers specified in dhcpmetrics.conf",
+    )
+    parser.add_argument(
+        "--timeoffset",
+        default=0,
+        type=float,
+        help="How many seconds the timestamps in collected metrics should be offset by",
+    )
+    return parser.parse_args()
 
 
-def collect_metrics(config):
+def collect_metrics(config, args):
     api_clients = []
 
     _logger.info('--> Starting metric collection <--')
@@ -37,7 +51,8 @@ def collect_metrics(config):
                 metric_path = metric_path_for_subnet_dhcp(
                     metric.subnet_prefix, metric.name
                 )
-                datapoint = (metric.timestamp, metric.value)
+                print(metric_path)
+                datapoint = (metric.timestamp+args.timeoffset, metric.value)
                 metrics.append((metric_path, datapoint))
         except KeaException as err:
             _logger.error(str(err))
@@ -45,3 +60,7 @@ def collect_metrics(config):
     carbon.send_metrics(metrics)
 
     _logger.info('--> Metric collection done <--')
+
+
+if __name__ == '__main__':
+    main()
