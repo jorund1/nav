@@ -15,6 +15,11 @@ CONFIGFILE = "dhcpmetrics.conf"
 
 
 def main():
+    """
+    Collects current DHCP metrics from each DHCP server configured in
+    'CONFDIR/dhcpmetrics.log'
+    """
+
     init_generic_logging(logfile=LOGFILE)
     config = getconfig(CONFIGFILE)
     args = parse_args()
@@ -36,6 +41,23 @@ def parse_args():
 
 
 def collect_metrics(config, args):
+    """
+    Collects current DHCP metrics from each configured DHCP server
+
+    :param config: parsed INI configuration of DHCP servers to collect metrics
+    from.
+
+    :param args: parsed sys.argv arguments
+
+    Example INI configuration:
+      [https://dhcp-api.example.com:8080/]
+      dhcp_version = 4
+      timeout = 10
+
+      [http://192.0.2.2/]
+      dhcp_version = 4
+      timeout = 40
+    """
     api_clients = []
 
     _logger.info('--> Starting metric collection <--')
