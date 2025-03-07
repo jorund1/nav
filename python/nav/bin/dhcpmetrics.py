@@ -17,20 +17,17 @@ CONFIGFILE = "dhcpmetrics.conf"
 def main():
     """
     Collects current DHCP metrics from each DHCP server configured in
-    'CONFDIR/dhcpmetrics.log'
+    'CONFDIR/dhcpmetrics.log' and sends them to graphite
     """
-
+    args = parse_args()
     init_generic_logging(logfile=LOGFILE)
     config = getconfig(CONFIGFILE)
-    args = parse_args()
     collect_metrics(config, args)
 
 
 def parse_args():
     """Builds an ArgumentParser and returns parsed program arguments"""
-    parser = argparse.ArgumentParser(
-        description="Collects DHCP metrics from servers specified in dhcpmetrics.conf",
-    )
+    parser = argparse.ArgumentParser(description=main.__doc__.strip())
     parser.add_argument(
         "--timeoffset",
         default=0,
