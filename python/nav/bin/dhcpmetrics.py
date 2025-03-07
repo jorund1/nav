@@ -2,10 +2,12 @@
 import argparse
 import logging
 from nav.config import getconfig
-from nav.dhcp.kea_metrics import Client, KeaException
+from nav.dhcp import kea_metrics
 from nav.logs import init_generic_logging
 from nav.metrics import carbon
 from nav.metrics.templates import metric_path_for_subnet_dhcp
+
+CLIENT = {"Kea Management API": kea_metrics.Client}
 
 
 _logger = logging.getLogger("nav.dhcpmetrics")
@@ -48,12 +50,13 @@ def collect_metrics(config, args):
 
     Example INI configuration:
       [https://dhcp-api.example.com:8080/]
-      dhcp_version = 4
-      timeout = 10
+      dhcp_version=4
+      service=Kea Management API
 
       [http://192.0.2.2/]
-      dhcp_version = 4
-      timeout = 40
+      dhcp_version=4
+      timeout=40
+      service=Kea Management API
     """
     api_clients = []
 
@@ -62,7 +65,8 @@ def collect_metrics(config, args):
     for uri, options in config.items():
         timeout = options.get("timeout", 10)
         dhcp_version = int(options.get("dhcp_version", "4"))
-        api_client = Client(uri, dhcp_version=dhcp_version, timeout=timeout)
+        service = options.get("service")
+        api_client = CLIENT[service](uri, dhcp_version=dhcp_version, timeout=timeout)
         api_clients.append(api_client)
 
     metrics = []
@@ -75,7 +79,7 @@ def collect_metrics(config, args):
                 print(metric_path)
                 datapoint = (metric.timestamp + args.timeoffset, metric.value)
                 metrics.append((metric_path, datapoint))
-        except KeaException as err:
+        except kea_metrics.KeaException as err:
             _logger.error(str(err))
 
     carbon.send_metrics(metrics)
