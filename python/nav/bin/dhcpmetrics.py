@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import argparse
 import logging
 from nav.config import getconfig
 from nav.dhcp.kea_metrics import Client, KeaException
@@ -15,9 +16,10 @@ CONFIGFILE = "dhcpmetrics.conf"
 
 def main():
     init_generic_logging(logfile=LOGFILE)
-    args = parse_args()
     config = getconfig(CONFIGFILE)
+    args = parse_args()
     collect_metrics(config, args)
+
 
 def parse_args():
     """Builds an ArgumentParser and returns parsed program arguments"""
@@ -28,7 +30,7 @@ def parse_args():
         "--timeoffset",
         default=0,
         type=float,
-        help="How many seconds the timestamps in collected metrics should be offset by",
+        help="Time in seconds the timestamps of collected metrics should be offset from current time",
     )
     return parser.parse_args()
 
@@ -52,7 +54,7 @@ def collect_metrics(config, args):
                     metric.subnet_prefix, metric.name
                 )
                 print(metric_path)
-                datapoint = (metric.timestamp+args.timeoffset, metric.value)
+                datapoint = (metric.timestamp + args.timeoffset, metric.value)
                 metrics.append((metric_path, datapoint))
         except KeaException as err:
             _logger.error(str(err))
