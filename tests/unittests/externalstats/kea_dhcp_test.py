@@ -1,6 +1,6 @@
 from collections import deque
-from nav.dhcp.kea_metrics import *
-from nav.dhcp.kea_metrics import _KeaStatus, _Metric
+from nav.externalstats.kea_dhcp import *
+from nav.externalstats.kea_dhcp import _KeaStatus, _Metric
 import pytest
 import requests
 from IPy import IP
@@ -17,59 +17,59 @@ class TestRecognizableAPIResponses:
     client should expect and handle appropiately.
     """
 
-    def test_fetch_metrics_should_return_correct_metrics(
+    def test_fetch_stats_should_return_correct_stats(
         self, valid_dhcp4, responsequeue
     ):
         """
-        This test checks that fetch_metrics() returns the most recent metric
-        for each subnet and metric type from the api response
+        This test checks that fetch_stats() returns the most recent stats
+        for each subnet and type from the api response
         """
 
-        config, statistics, expected_metrics = valid_dhcp4
+        config, statistics, expected_stats = valid_dhcp4
         responsequeue.autofill("dhcp4", config=config, statistics=statistics)
         client = Client("http://example.org/")
 
-        actual_metrics = client.fetch_metrics()
+        actual_stats = client.fetch_stats()
 
-        def clean(metrics):
+        def clean(stats):
             """
-            Set metric timestamps to zero, because we do not care to compare the
-            time a metric was fetched into NAV in this test.
+            Set stat timestamps to zero, because we do not care to compare the
+            time a stat was fetched into NAV in this test.
             """
-            return [replace(metric, timestamp=0) for metric in metrics]
+            return [replace(stat, timestamp=0) for stat in stats]
 
-        assert set(clean(actual_metrics)) == set(clean(expected_metrics))
+        assert set(clean(actual_stats)) == set(clean(expected_stats))
 
-    def test_fetch_metrics_should_only_have_recent_timestamps(
+    def test_fetch_stats_should_only_have_recent_timestamps(
         self, valid_dhcp4, responsequeue
     ):
         """
-        This test checks that fetch_metrics() only returns metrics that have
-        recent timestamps - so that periodically fetching metrics will form an
+        This test checks that fetch_stats() only returns stats that have
+        recent timestamps - so that periodically fetching stats will form an
         evenly spaced timeseries (Kea doesn't seem to change timestamps unless
-        metric data is changed, which results in very sporadic timeseries)
+        stat data is changed, which results in very sporadic timeseries)
         """
 
-        config, statistics, expected_metrics = valid_dhcp4
+        config, statistics, expected_stats = valid_dhcp4
         responsequeue.autofill("dhcp4", config=config, statistics=statistics)
         client = Client("http://example.org/")
 
-        actual_metrics = client.fetch_metrics()
-        assert len(actual_metrics) > 0
-        for metric in actual_metrics:
+        actual_stats = client.fetch_stats()
+        assert len(actual_stats) > 0
+        for stat in actual_stats:
             assert (
-                metric.timestamp >= (datetime.now() - timedelta(minutes=5)).timestamp()
+                stat.timestamp >= (datetime.now() - timedelta(minutes=5)).timestamp()
             )
 
-    def test_fetch_metrics_should_handle_empty_config_in_api_configuration_response(
+    def test_fetch_stats_should_handle_empty_config_in_api_configuration_response(
         self, valid_dhcp4, responsequeue
     ):
         """
         We assume in this case that the Kea DHCP server we query just doesn't have
         any subnets configured
 
-        The correct thing for fetch_metrics() to do in this case is to just
-        return an empty list of metrics since there are no subnets to fetch
+        The correct thing for fetch_stats() to do in this case is to just
+        return an empty list of stats since there are no subnets to fetch
         from.
 
         TODO: Here, it may be wished for that NAV prints a log info stating
@@ -79,14 +79,14 @@ class TestRecognizableAPIResponses:
         responsequeue.autofill("dhcp4", config=None, statistics=statistics)
         responsequeue.add("config-get", lambda *a, **ka: kearesponse({"Dhcp4": {}}))
         client = Client("http://example.org/")
-        assert list(client.fetch_metrics()) == []
+        assert list(client.fetch_stats()) == []
 
-    def test_fetch_metrics_should_handle_empty_statistic_in_api_statistics_response(
+    def test_fetch_stats_should_handle_empty_statistic_in_api_statistics_response(
         self, valid_dhcp4, responsequeue
     ):
         """
         If the Kea DHCP server returns no values for a specific statistic,
-        disregard that metric when creating a list of metrics. In the extreme
+        disregard that stat when creating a list of stats. In the extreme
         case that all statistics are empty, return an empty list.
         """
         config, statistics, _ = valid_dhcp4
@@ -98,14 +98,14 @@ class TestRecognizableAPIResponses:
             ),
         )
         client = Client("http://example.org/")
-        assert list(client.fetch_metrics()) == []
+        assert list(client.fetch_stats()) == []
 
-    def test_fetch_metrics_should_handle_unsupported_statistic_in_statistics_response(
+    def test_fetch_stats_should_handle_unsupported_statistic_in_statistics_response(
         self, valid_dhcp4, responsequeue
     ):
         """
-        If the Kea DHCP server doesn't support a specific metric (e.g. because we query an
-        outdated version), just disregard that meric, and in the extreme case that no metric
+        If the Kea DHCP server doesn't support a specific stat (e.g. because we query an
+        outdated version), just disregard that meric, and in the extreme case that no stat
         is supported, return an empty list.
 
         TODO: Here, it may be wished for that NAV prints a log warning stating
@@ -122,9 +122,9 @@ class TestRecognizableAPIResponses:
         responsequeue.autofill("dhcp4", config=config, statistics=None)
         responsequeue.add("statistic-get", lambda *a, **ka: kearesponse({}))
         client = Client("http://example.org/")
-        assert list(client.fetch_metrics()) == []
+        assert list(client.fetch_stats()) == []
 
-    def test_fetch_metrics_should_raise_an_exception_on_http_error_response(
+    def test_fetch_stats_should_raise_an_exception_on_http_error_response(
         self, valid_dhcp4, responsequeue
     ):
         """
@@ -143,12 +143,12 @@ class TestRecognizableAPIResponses:
         client = Client("http://example.org/")
 
         with pytest.raises(KeaException):
-            client.fetch_metrics()
+            client.fetch_stats()
 
     @pytest.mark.parametrize(
         "status", [status for status in _KeaStatus if status != _KeaStatus.SUCCESS]
     )
-    def test_fetch_metrics_should_raise_an_exception_on_error_status_in_config_response_from_api(
+    def test_fetch_stats_should_raise_an_exception_on_error_status_in_config_response_from_api(
         self, valid_dhcp4, responsequeue, status
     ):
         """
@@ -160,12 +160,12 @@ class TestRecognizableAPIResponses:
         responsequeue.add("config-get", kearesponse(config, status=status))
         client = Client("http://example.org/")
         with pytest.raises(KeaException):
-            client.fetch_metrics()
+            client.fetch_stats()
 
     @pytest.mark.parametrize(
         "status", [status for status in _KeaStatus if status != _KeaStatus.SUCCESS]
     )
-    def test_fetch_metrics_should_raise_an_exception_on_error_status_in_statistic_response_from_api(
+    def test_fetch_stats_should_raise_an_exception_on_error_status_in_statistic_response_from_api(
         self, valid_dhcp4, responsequeue, status
     ):
         """
@@ -177,7 +177,7 @@ class TestRecognizableAPIResponses:
         responsequeue.add("statistic-get", kearesponse(statistics, status=status))
         client = Client("http://example.org/")
         with pytest.raises(KeaException):
-            client.fetch_metrics()
+            client.fetch_stats()
 
     @pytest.mark.parametrize(
         "status",
@@ -187,7 +187,7 @@ class TestRecognizableAPIResponses:
             if status not in (_KeaStatus.SUCCESS, _KeaStatus.UNSUPPORTED)
         ],
     )
-    def test_fetch_metrics_should_raise_an_exception_on_error_status_in_config_hash_response_from_api(
+    def test_fetch_stats_should_raise_an_exception_on_error_status_in_config_hash_response_from_api(
         self, valid_dhcp4, responsequeue, status
     ):
         """
@@ -204,7 +204,7 @@ class TestRecognizableAPIResponses:
             "config-hash-get", kearesponse({"hash": foohash}, status=status)
         )
         with pytest.raises(KeaException):
-            client.fetch_metrics()
+            client.fetch_stats()
 
 
 class TestUnrecognizableAPIResponses:
@@ -217,7 +217,7 @@ class TestUnrecognizableAPIResponses:
 
     invalid_response = "{}"
 
-    def test_fetch_metrics_should_raise_an_exception_on_unrecognizable_config_response_from_api(
+    def test_fetch_stats_should_raise_an_exception_on_unrecognizable_config_response_from_api(
         self, valid_dhcp4, responsequeue
     ):
         config, statistics, _ = valid_dhcp4
@@ -226,9 +226,9 @@ class TestUnrecognizableAPIResponses:
         responsequeue.autofill("dhcp4", config=None, statistics=statistics)
         responsequeue.add("config-get", self.invalid_response)
         with pytest.raises(KeaException):
-            client.fetch_metrics()
+            client.fetch_stats()
 
-    def test_fetch_metrics_should_raise_an_exception_on_unrecognizable_statistic_response_from_api(
+    def test_fetch_stats_should_raise_an_exception_on_unrecognizable_statistic_response_from_api(
         self, valid_dhcp4, responsequeue
     ):
         config, statistics, _ = valid_dhcp4
@@ -237,9 +237,9 @@ class TestUnrecognizableAPIResponses:
         responsequeue.autofill("dhcp4", config=config, statistics=None)
         responsequeue.add("statistic-get", self.invalid_response)
         with pytest.raises(KeaException):
-            client.fetch_metrics()
+            client.fetch_stats()
 
-    def test_fetch_metrics_should_raise_an_exception_on_unrecognizable_config_hash_response_from_api(
+    def test_fetch_stats_should_raise_an_exception_on_unrecognizable_config_hash_response_from_api(
         self, valid_dhcp4, responsequeue
     ):
         config, statistics, _ = valid_dhcp4
@@ -248,7 +248,7 @@ class TestUnrecognizableAPIResponses:
         responsequeue.autofill("dhcp4", config=config, statistics=statistics)
         responsequeue.add("config-hash-get", self.invalid_response)
         with pytest.raises(KeaException):
-            client.fetch_metrics()
+            client.fetch_stats()
 
 
 @pytest.fixture
@@ -342,11 +342,11 @@ def valid_dhcp4():
     }
 
     # Each list in the 'statistics' response from the api (see above dict) is a
-    # timeseries for a specific metric type for a specific subnet.  The first
-    # metric in each list is assumed to be the most recent, and this is the
-    # metric we expect to get for each metric type and subnet after processing
+    # timeseries for a specific stat type for a specific subnet.  The first
+    # stat in each list is assumed to be the most recent, and this is the
+    # stat we expect to get for each stat type and subnet after processing
     # the api response.
-    expected_metrics = [
+    expected_stats = [
         _Metric(
             datetime.fromisoformat("2024-07-22T09:06:58.140438+00:00").timestamp(),
             IP("192.0.1.0/24"),
@@ -439,7 +439,7 @@ def valid_dhcp4():
         ),
     ]
 
-    return config, statistics, expected_metrics
+    return config, statistics, expected_stats
 
 
 def kearesponse(val, status=_KeaStatus.SUCCESS):

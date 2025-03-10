@@ -14,7 +14,7 @@
 # along with NAV. If not, see <http://www.gnu.org/licenses/>.
 #
 """
-Fetch DHCP metrics from Kea DHCP servers by using Kea Management API
+Fetch DHCP stats from Kea DHCP servers by using Kea Management API
 
              |
    NAV side  |  Kea side
@@ -73,13 +73,13 @@ class _Metric:
 
 class Client:
     """
-    Kea Management API client that fetches DHCP metrics for each subnet managed
+    Kea Management API client that fetches DHCP stats for each subnet managed
     by some specific underlying Kea DHCP server.
     """
 
     def __init__(
         self,
-        uri: str,
+        url: str = "",
         dhcp_version: int = 4,
         timeout: int = 10,
     ):
@@ -90,10 +90,12 @@ class Client:
         :param timeout:      How long to wait for a http response from
                              the Kea Control Agent before timing out.
         """
-        if not uri.startswith("https://"):
+        if not url:
+            raise ValueError("No URL given")
+        if not url.startswith("https://"):
             _logger.warning("Kea Management API client configured to use plain HTTP")
 
-        self._rest_uri: str = uri
+        self._rest_uri: str = url
         self._dhcp_version: int = dhcp_version
         self._dhcp_config: Optional[dict] = None
         self._timeout: int = timeout
@@ -108,16 +110,16 @@ class Client:
         else:
             raise ValueError(f"DHCPv{dhcp_version} is not supported")
 
-    def fetch_metrics(self) -> list[_Metric]:
+    def fetch_stats(self) -> list[_Metric]:
         """
         Fetches and returns a list containing the most recent DHCP
-        metrics for each subnet + metric-name combination managed by
+        stats for each subnet + metric combination managed by
         the Kea DHCP server.
 
         If the Kea Control Agent responds with an empty response to
-        one or more of the requests for some metric(s), these metrics
+        one or more of the requests for some stat(s), these stats
         will be missing in the returned list, but a list is still
-        succesfully returned. Other errors while requesting metrics
+        succesfully returned. Other errors while requesting stats
         will cause a fitting subclass of KeaException to be raised.
 
         Exceptions raised:
@@ -126,48 +128,49 @@ class Client:
         errors, unexpected responses) causes a KeaException to be raised.
 
         If the Kea Control Agent doesn't support the bare-minimum set of
-        commands this client needs for fetching metrics, then a KeaUnsupported
+        commands this client needs for fetching stats, then a KeaUnsupported
         exception is raised.
         """
         self._session = Session()
-        start_time = datetime.now().timestamp()
 
         config = self._fetch_config()
         subnets = self._subnets_of_config(config)
 
-        metrics: list[_Metric] = []
+        statistics = []
         for subnet in subnets:
             for metric_name, api_naming in self._api_namings:
-                value = self._fetch_metric_value(subnet, api_naming)
-                if value is not None:
-                    metric = _Metric(start_time, subnet.prefix, metric_name, value)
-                    metrics.append(metric)
+                value = self._fetch_stat(subnet, api_naming)
+                if value is None:
+                    continue
+                path = metric_path_for_subnet_dhcp(subnet.prefix, metric_name)
+                metric = _Metric(start_time, subnet.prefix, metric_name, value)
+                statistics.append(metric)
 
         maybe_updated_config = self._fetch_config()
         maybe_updated_subnets = self._subnets_of_config(maybe_updated_config)
         if sorted(subnets) != sorted(maybe_updated_subnets):
             _logger.warning(
                 "Server's subnet configuration was modified during fetching of DHCP "
-                "metrics. This may cause metric data being associated with wrong subnet."
+                "stats. This may cause stats being associated with wrong subnet."
             )
 
         self._session.close()
         self._session = None
         end_time = datetime.now().timestamp()
         _logger.info(
-            "Fetched %d metric(s) for %d subnet(s) in %f seconds from %s",
-            len(metrics),
+            "Fetched %d stats(s) for %d subnet(s) in %f seconds from %s",
+            len(statistics),
             len(subnets),
             end_time - start_time,
             self._rest_uri,
         )
-        return metrics
+        return statistics
 
-    def _fetch_metric_value(
+    def _fetch_stat(
         self, subnet: _Subnet, api_metric_name: str
     ) -> Optional[int]:
         """
-        Return the most recent metric value recorded by the Kea DHCP server for
+        Return the most recent stat value recorded by the Kea DHCP server for
         the given subnet with the given api_metric_name
         """
         full_name = f"subnet[{subnet.id}].{api_metric_name}"
@@ -189,7 +192,7 @@ class Client:
             return None
 
         # The Kea server may be configured to keep track of the N most recent
-        # metric values for some N>=1, but we only care about the most recent
+        # data points for some N>=1, but we only care about the most recent
         # one. The Kea 2.6 Management API documentation does not specify any
         # explicit ordering of the returned samples, but ISC's official Kea
         # Management API client, Stork, relies on the fact that the first
