@@ -38,53 +38,38 @@ def main():
     Collects current metrics from each endpoint configured in
     'CONFDIR/externalstats.log' and sends them to graphite
     """
-    args = parse_args()
     init_generic_logging(logfile=LOGFILE)
     config = getconfig(CONFIGFILE)
-    collect_metrics(config, args)
-
+    args = parse_args()
+    collect_metrics(config)
 
 def parse_args():
     """Builds an ArgumentParser and returns parsed program arguments"""
+    # Include this mainly for --help option
     parser = argparse.ArgumentParser(description=main.__doc__.strip())
-    parser.add_argument(
-        "--timeoffset",
-        default=0,
-        type=float,
-        help="Time in seconds the timestamps of collected metrics should be offset from current time",
-    )
     return parser.parse_args()
 
-
-def collect_metrics(config, args):
+def collect_metrics(config):
     """
     Collects current metrics from each configured endpoint
 
     :param config: parsed INI configuration of endpoints to collect metrics
     from
-
-    :param args: parsed sys.argv arguments
     """
 
     _logger.info("--> Starting metric collection <--")
 
-    fetchers = []
+    stats = []
     for name, options in config.items():
         if not name.startswith("endpoint_"):
             continue
         type = options.get("type")
         kwargs = {opt: val for opt, val in options.items() if opt != "type"}
         cls = FETCHERS[type]
-        fetchers.append(cls(**kwargs))
+        fetcher = cls(**kwargs)
+        stats.extend(fetcher.fetch_stats)
 
-    metrics = []
-    for fetcher in fetchers:
-        metrics.extend(
-            replace(m, timestamp=m.timestamp+args.timeoffset) for m in fetcher.fetch_metrics()
-        )
-
-
-    carbon.send_metrics(metrics)
+    carbon.send_metrics(stats)
 
     _logger.info("--> Metric collection done <--")
 
