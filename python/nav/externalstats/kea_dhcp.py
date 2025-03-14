@@ -14,15 +14,7 @@
 # along with NAV. If not, see <http://www.gnu.org/licenses/>.
 #
 """
-Fetch DHCP stats from Kea DHCP servers by using Kea Management API
-
-             |
-   NAV side  |  Kea side
-             |
-        HTTP |                         IPC
-Client <---------> Kea Control Agent <=====> Kea DHCP4 server
-             |       (API server)
-             |
+Fetch DHCP stats from Kea DHCP servers through the Kea Management API
 """
 
 from dataclasses import dataclass
@@ -37,6 +29,7 @@ from IPy import IP
 from requests import RequestException, JSONDecodeError, Session
 
 from nav.errors import GeneralException
+from nav.metrics.templates import metric_path_for_subnet_dhcp
 
 _logger = logging.getLogger(__name__)
 
@@ -47,53 +40,38 @@ class _Subnet:
     prefix: IP
 
 
-@dataclass(order=True, frozen=True)
-class _Metric:
-    """
-    Represents a metric collected from a DHCP server. Three types of metrics
-    with different value interpretations supported:
-
-    total:     value is the maximum possible amount of active leases in the
-               subnet
-
-    assigned:  value is the current amount of active leases in the subnet
-
-    declined:  value is the amount of DHCP-maintained addresses in use by an
-               entity unknown to the server and thus not available for
-               assignment. (Should ideally always be zero.)
-               For more detailed info on this metric, see e.g.
-               https://web.archive.org/web/20240816164358/https://kea.readthedocs.io/en/kea-2.2.0/arm/dhcp6-srv.html#duplicate-addresses-dhcpdecline-support
-    """
-
-    timestamp: float
-    subnet_prefix: IP
-    name: Literal["total", "assigned", "declined"]
-    value: int
-
-
 class Client:
     """
-    Kea Management API client that fetches DHCP stats for each subnet managed
-    by some specific underlying Kea DHCP server.
+    Fetches DHCP stats for each subnet managed by some Kea DHCP server by using
+    the Kea Management API
+
+    TODO: This client assumes no hooks have been installed. The lease-stats hook
+          is required for reliable stats when multiple servers share the same lease
+          database because the standard commands issue the cache, not the DB.
     """
 
     def __init__(
         self,
-        url: str = "",
         dhcp_version: int = 4,
+        url: str = "",
+        http_basic_user: str = "",
+        http_basic_password: str = "",
+        client_cert_path: str = "",
+        client_key_path: str = "",
         timeout: int = 10,
     ):
-        """
-        :param uri:          URI for the Kea Control Agent (Management API endpoint).
-        :param dhcp_version: IP version served by Kea DHCP server. Currently,
-                             only IPv4 DHCP servers are supported.
-        :param timeout:      How long to wait for a http response from
-                             the Kea Control Agent before timing out.
-        """
         if not url:
             raise ValueError("No URL given")
+
         if not url.startswith("https://"):
-            _logger.warning("Kea Management API client configured to use plain HTTP")
+            _logger.info("Kea API client configured to use plain HTTP")
+            if http_basic_password:
+                _logger.warning("Using HTTP Basic Authentication without HTTPS")
+            if client_cert_path:
+                raise ValueError("HTTPS is required to use client certificates")
+
+        if not client_cert_path and client_key_path:
+            _logger.info("No client certificate given, ignoring certificate key...")
 
         self._rest_uri: str = url
         self._dhcp_version: int = dhcp_version
@@ -110,10 +88,10 @@ class Client:
         else:
             raise ValueError(f"DHCPv{dhcp_version} is not supported")
 
-    def fetch_stats(self) -> list[_Metric]:
+    def fetch_stats(self) -> list[tuple[str, tuple[float, int]]]:
         """
         Fetches and returns a list containing the most recent DHCP
-        stats for each subnet + metric combination managed by
+        stats for each subnet + stat name combination managed by
         the Kea DHCP server.
 
         If the Kea Control Agent responds with an empty response to
@@ -132,26 +110,27 @@ class Client:
         exception is raised.
         """
         self._session = Session()
+        start_time = datetime.now().timestamp()
 
         config = self._fetch_config()
         subnets = self._subnets_of_config(config)
 
-        statistics = []
+        stats = []
         for subnet in subnets:
-            for metric_name, api_naming in self._api_namings:
-                value = self._fetch_stat(subnet, api_naming)
+            for stat_name, api_naming in self._api_namings:
+                value = self._fetch_stat_value(subnet, api_naming)
                 if value is None:
                     continue
-                path = metric_path_for_subnet_dhcp(subnet.prefix, metric_name)
-                metric = _Metric(start_time, subnet.prefix, metric_name, value)
-                statistics.append(metric)
+                path = metric_path_for_subnet_dhcp(subnet.prefix, stat_name)
+                stats.append((path, (start_time, value)))
 
         maybe_updated_config = self._fetch_config()
         maybe_updated_subnets = self._subnets_of_config(maybe_updated_config)
         if sorted(subnets) != sorted(maybe_updated_subnets):
             _logger.warning(
                 "Server's subnet configuration was modified during fetching of DHCP "
-                "stats. This may cause stats being associated with wrong subnet."
+                "stats. This may cause stats collected this run to be associated with "
+                "wrong subnet."
             )
 
         self._session.close()
@@ -159,21 +138,21 @@ class Client:
         end_time = datetime.now().timestamp()
         _logger.info(
             "Fetched %d stats(s) for %d subnet(s) in %f seconds from %s",
-            len(statistics),
+            len(stats),
             len(subnets),
             end_time - start_time,
             self._rest_uri,
         )
-        return statistics
+        return stats
 
-    def _fetch_stat(
-        self, subnet: _Subnet, api_metric_name: str
+    def _fetch_stat_value(
+        self, subnet: _Subnet, api_stat_name: str
     ) -> Optional[int]:
         """
         Return the most recent stat value recorded by the Kea DHCP server for
-        the given subnet with the given api_metric_name
+        the given subnet and stat name.
         """
-        full_name = f"subnet[{subnet.id}].{api_metric_name}"
+        full_name = f"subnet[{subnet.id}].{api_stat_name}"
         try:
             response = self._send_query("statistic-get", name=full_name)
         except KeaEmpty:
@@ -186,20 +165,13 @@ class Client:
         if len(samples) == 0:
             _logger.info(
                 "No samples found when querying for '%s' in subnet '%s'",
-                api_metric_name,
+                api_stat_name,
                 subnet.prefix,
             )
             return None
 
-        # The Kea server may be configured to keep track of the N most recent
-        # data points for some N>=1, but we only care about the most recent
-        # one. The Kea 2.6 Management API documentation does not specify any
-        # explicit ordering of the returned samples, but ISC's official Kea
-        # Management API client, Stork, relies on the fact that the first
-        # sample in the returned list is the most recent^[0], so for simplicity's
-        # sake so will we.
-        #
-        # [0]: https://gitlab.isc.org/isc-projects/stork/-/blob/4193375c01e3ec0b3d862166e2329d76e686d16d/backend/server/apps/kea/rps.go#L223-227
+        # The reference API consumer assumes the first sample is the most recent
+        # See https://gitlab.isc.org/isc-projects/stork/-/blob/4193375c01e3ec0b3d862166e2329d76e686d16d/backend/server/apps/kea/rps.go#L223-227
         value, timestring = samples[0]
         return value
 
@@ -282,8 +254,10 @@ class Client:
             responses = responses.json()
         except JSONDecodeError as err:
             raise KeaException(
-                "Server does not look like a Kea Control Agent; ",
-                "response was not valid JSON",
+                (
+                    "Server does not look like a Kea Control Agent; "
+                    "response was not valid JSON"
+                ),
                 log_summary,
             ) from err
         except RequestException as err:
