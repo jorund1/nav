@@ -26,7 +26,7 @@ DEFAULT_PROTOCOL = 'text'  # MB doesn't trust pickle so we go with text
 
 # graphite likes pickle protocol 2. Python 3: 3, Python 3.8+: 4
 PICKLE_PROTOCOL = range(0, pickle.HIGHEST_PROTOCOL + 1)
-FLAGS = "-f j"
+FLAGS = ["-f", "j"]
 METRIC_MAPPER = {
     "defined": "max",
     "used": "cur",
@@ -117,8 +117,7 @@ def parse_args():
 
 # run command and store json output
 def exec_dhcpd_pools(config_file, cmd_path=DEFAULT_CMD_PATH):
-    flags = f"-c {config_file} {FLAGS}".split()
-    cmd = [cmd_path] + list(flags)
+    cmd = [cmd_path, "-c", config_file] + FLAGS
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode:
         sys.exit(result.stderr)
