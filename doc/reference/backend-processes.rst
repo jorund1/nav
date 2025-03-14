@@ -26,6 +26,7 @@ relevant section in this document:
 - `mactrace`_
 - `maintengine`_
 - `navstats`_
+- `externalstats`_
 - `netbiostracker`_
 - `pping`_
 - `servicemon`_
@@ -232,6 +233,23 @@ user in the config file.
   :file:`navstats.conf`
 :Logs:
   :file:`maintengine.log`
+
+externalstats
+-------------
+
+Regularly fetches stats and produces Graphite metrics from endpoints not necessarily
+part of the network managed by NAV, such as DHCP servers.
+
+
+:Dependencies:
+  None
+:Run mode:
+  cron
+:Configuration:
+  :file:`externalstats.conf`
+:Logs:
+  :file:`externalstats.log`
+
 
 
 netbiostracker

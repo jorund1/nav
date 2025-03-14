@@ -20,6 +20,7 @@ This section contains reference material for end-users.
    ipam
    ipdevpoll
    external_authentication
+   external_stats
    mailin
    models-event
    models-manage
