@@ -14,7 +14,7 @@
 # along with NAV. If not, see <http://www.gnu.org/licenses/>.
 #
 """
-Fetch DHCP stats from Kea DHCP servers through the Kea Management API
+Fetch DHCP stats from Kea DHCP servers through the Kea API
 """
 
 from dataclasses import dataclass
@@ -23,7 +23,7 @@ from enum import IntEnum
 from itertools import chain
 import json
 import logging
-from typing import Optional, Literal
+from typing import Optional
 
 from IPy import IP
 from requests import RequestException, JSONDecodeError, Session
@@ -43,7 +43,7 @@ class _Subnet:
 class Client:
     """
     Fetches DHCP stats for each subnet managed by some Kea DHCP server by using
-    the Kea Management API
+    the Kea API
 
     TODO: This client assumes no hooks have been installed. The lease-stats hook
           is required for reliable stats when multiple servers share the same lease
@@ -54,29 +54,24 @@ class Client:
         self,
         dhcp_version: int = 4,
         url: str = "",
-        http_basic_user: str = "",
+        http_basic_username: str = "",
         http_basic_password: str = "",
         client_cert_path: str = "",
-        client_key_path: str = "",
+        client_cert_key_path: str = "",
         timeout: int = 10,
     ):
         if not url:
             raise ValueError("No URL given")
 
-        if not url.startswith("https://"):
-            _logger.info("Kea API client configured to use plain HTTP")
-            if http_basic_password:
-                _logger.warning("Using HTTP Basic Authentication without HTTPS")
-            if client_cert_path:
-                raise ValueError("HTTPS is required to use client certificates")
-
-        if not client_cert_path and client_key_path:
-            _logger.info("No client certificate given, ignoring certificate key...")
-
-        self._rest_uri: str = url
         self._dhcp_version: int = dhcp_version
-        self._dhcp_config: Optional[dict] = None
+        self._url: str = url
+        self._http_basic_user: str = http_basic_username
+        self._http_basic_password: str = http_basic_password
+        self._client_cert_path: str = client_cert_path
+        self._client_key_path: str = client_cert_key_path
         self._timeout: int = timeout
+
+        self._dhcp_config: Optional[dict] = None
         self._session: Optional[Session] = None
 
         if dhcp_version == 4:
@@ -109,7 +104,7 @@ class Client:
         commands this client needs for fetching stats, then a KeaUnsupported
         exception is raised.
         """
-        self._session = Session()
+        self._session = self._create_session()
         start_time = datetime.now().timestamp()
 
         config = self._fetch_config()
@@ -141,7 +136,7 @@ class Client:
             len(stats),
             len(subnets),
             end_time - start_time,
-            self._rest_uri,
+            self._url,
         )
         return stats
 
@@ -211,7 +206,7 @@ class Client:
 
     def _send_query(self, command: str, **kwargs) -> dict:
         """
-        Returns the Management API response from the Kea Control Agent to the
+        Returns the API response from the Kea Control Agent to the
         query with command `command` instructed towards the Kea DHCP server.
         Additional keyword arguments to this function will be passed as
         arguments to the command.
@@ -224,12 +219,9 @@ class Client:
         Valid Kea Control Agent responses that indicate a failure on the
         server-end causes a descriptive subclass of KeaException to be raised.
         """
-        log_summary = {
-            "Client status": "Waiting for response from Kea Control Agent",
-            "Kea Control Agent URI": self._rest_uri,
-            "Management API command": command,
-        }
-        _logger.debug(log_summary)
+        assert self._session is not None
+
+        _logger.debug("Sending command '%s' to Kea API at %s", command, self._url)
 
         post_data = json.dumps(
             {
@@ -241,29 +233,29 @@ class Client:
 
         try:
             responses = self._session.post(
-                self._rest_uri,
+                self._url,
                 data=post_data,
                 timeout=self._timeout,
                 headers={"Content-Type": "application/json"},
             )
-            log_summary["client status"] = "Received response from Kea Control Agent"
-            log_summary["HTTP status"] = (
-                f"HTTP {responses.status_code}: {responses.reason}"
+            _logger.debug(
+                "%s responded with 'HTTP %s: %s' to command '%s'",
+                self._url,
+                responses.status_code,
+                responses.reason,
+                command,
             )
             responses.raise_for_status()
             responses = responses.json()
         except JSONDecodeError as err:
             raise KeaException(
-                (
-                    "Server does not look like a Kea Control Agent; "
-                    "response was not valid JSON"
-                ),
-                log_summary,
+                    "%s does not look like a Kea API endpoint; "
+                    "response to command '%s' was not valid JSON",
+                    self._url,
+                    command,
             ) from err
         except RequestException as err:
-            raise KeaException(
-                "Error with connection to Kea Control Agent", log_summary
-            ) from err
+            raise KeaException(err.strerror) from err
 
         # Any valid response from Kea is a JSON list with one entry corresponding to the
         # response from either the dhcp4 or dhcp6 service we queried
@@ -280,34 +272,65 @@ class Client:
             ):
                 # If the response is a JSON object it's a specific error message
                 # See https://kea.readthedocs.io/en/kea-2.6.0/arm/ctrl-channel.html#control-agent-command-response-format
-                log_summary["response"] = f"{responses['result']}: {responses['text']}"
-                raise KeaException(
-                    "Likely authentication or authorization error", log_summary
-                )
+                raise KeaException(f"{responses['result']}: {responses['text']}")
             raise KeaException(
-                "Server does not look like a Kea Control Agent; "
+                "%s does not look like a Kea Control Agent; "
                 "response JSON structured in an unknown way",
-                log_summary,
+                self._url
             )
 
         response = responses[0]
         status = response["result"]
         description = response.get("text", "(no description)")
 
-        log_summary["response"] = f"Kea status {status}: {description}"
-        _logger.debug(log_summary)
+        _logger.debug(
+            "Response from %s to command '%s' was '%s: %s'",
+            self._url,
+            command,
+            status,
+            description,
+        )
 
         if status == _KeaStatus.SUCCESS:
             return response
         elif status == _KeaStatus.UNSUPPORTED:
-            raise KeaUnsupported(details=log_summary)
+            raise KeaUnsupported
         elif status == _KeaStatus.EMPTY:
-            raise KeaEmpty(details=log_summary)
+            raise KeaEmpty
         elif status == _KeaStatus.ERROR:
-            raise KeaError(details=log_summary)
+            raise KeaError
         elif status == _KeaStatus.CONFLICT:
-            raise KeaConflict(details=log_summary)
-        raise KeaException("Kea returned an unkown status response", log_summary)
+            raise KeaConflict
+        raise KeaException("Unkown response status")
+
+    def _create_session(self) -> Session:
+        session = Session()
+
+        https = self._url.startswith("https://")
+
+        if self._http_basic_user and self._http_basic_password:
+            _logger.debug("Using HTTP Basic Authentication")
+            if not https:
+                _logger.warning("Using HTTP Basic Authentication without HTTPS")
+            session.auth = (self._http_basic_user, self._http_basic_password)
+        else:
+            _logger.debug("Not using HTTP Basic Authentication")
+
+        if self._client_cert_path:
+            _logger.debug("Using client certificate authentication")
+            _logger.debug("Certificate path: '%s'", self._client_cert_path)
+            if not https:
+                raise ValueError("HTTPS is required to use client certificates")
+            if self._client_key_path:
+                _logger.debug("Certificate key path: '%s'", self._client_key_path)
+                session.cert = (self._client_cert_path, self._client_key_path)
+            else:
+                session.cert = self._client_cert_path
+        else:
+            _logger.debug("Not using client certificate authentication")
+
+        return session
+
 
     def _subnets_of_config(self, config: dict) -> list[_Subnet]:
         """
@@ -335,24 +358,7 @@ class Client:
 
 
 class KeaException(GeneralException):
-    """Error related to interaction with a Kea Control Agent"""
-
-    def __init__(
-        self, message: Optional[str] = None, details: Optional[dict[str, str]] = None
-    ):
-        self.message = message
-        self.details = details
-
-    def __str__(self) -> str:
-        message = f"{self.message}" or self.__doc__ or ""
-        details = ""
-        if self.details:
-            details = ", ".join(
-                f"{label} was '{info}'" for label, info in self.details.items()
-            )
-            details = f" ({details})"
-        return f"{message}{details}"
-
+    """An unexpected error occurred when communicating with Kea"""
 
 class KeaError(KeaException):
     """Kea failed during command processing"""
