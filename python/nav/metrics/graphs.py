@@ -17,9 +17,12 @@
 """Getting graphs of NAV-collected data from Graphite"""
 
 import re
+from itertools import chain
+from typing import Any, Iterable
 
 from django.urls import reverse
 from urllib.parse import urlencode
+
 
 
 TIMETICKS_IN_DAY = 100 * 3600 * 24
@@ -348,3 +351,49 @@ def translate_serieslist_to_regex(series):
 
     pat = "".join(_convert_char(c) for c in series)
     return re.compile(pat)
+
+
+def get_stacked_graph_url(
+        series: Iterable[tuple[Any, Iterable[str]]] | Iterable[str],
+        keys: Iterable[tuple[str, str]] | None = None,
+        title: str | None = None,
+) -> str | None:
+    """
+    :param series: pairs of group-alias + graphite-ids that should be summed
+                   and regarded as a unit for graphing purposes;
+                   OR a list of graphite-ids that each should be regarded as
+                   their own unit for graphing purposes.
+    :param keys:   if given, the graphite-ids are assumed to be nonleaf nodes
+                   and each unit + key combination is what becomes regarded as
+                   a unit (and summed if consisting of multiple graphite-ids)
+                   for graphing purposes.
+    :param title:  title of the graph.
+    """
+    series_ = iter(series)
+    try:
+        first = next(series_)
+        series_ = chain([first], series_)
+    except StopIteration:
+        return
+
+    targets = []
+    match first:
+        case (_, _) if keys is not None:
+            targets.extend(
+                f"aliasQuery(sumSeries({paths}), , sumSeries({denominators}),'renderer=area;;{alias} {key} (out of %d {denominator})')"
+                for key, denominator in keys
+                for alias, ids in series_
+                for paths, denominators in zip(",".join(f"{id}.{key}"
+                                                for id in ids),
+                                               ",".join(f"{id}.{denominator}"
+                                                for id in ids))
+            )
+            targets.append(
+                f"alias(sumSeries({}, {})"
+            )
+        case (_, _):
+            targets.extend(
+                f"alias(sumSeries({joined}), 'renderer=area;;{alias}')"
+                for alias, ids in series_
+                for joined in (",".join(ids))
+            )
