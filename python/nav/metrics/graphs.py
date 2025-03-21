@@ -16,12 +16,10 @@
 #
 """Getting graphs of NAV-collected data from Graphite"""
 import re
-from itertools import chain
-from typing import Any, Iterable
+from typing import Any, Sequence
 
 from django.urls import reverse
 from urllib.parse import urlencode
-
 
 
 TIMETICKS_IN_DAY = 100 * 3600 * 24
@@ -353,46 +351,43 @@ def translate_serieslist_to_regex(series):
 
 
 def get_stacked_graph_url(
-        series: Iterable[tuple[Any, Iterable[str]]] | Iterable[str],
-        keys: Iterable[tuple[str, str]] | None = None,
-        title: str | None = None,
+    parents_to_bundle: Sequence[tuple[Any, Sequence[str]]],
+    ratios: Sequence[tuple[str, str]] | None = None,
+    title: str = "",
 ) -> str | None:
     """
-    :param series: pairs of group-alias + graphite-ids that should be summed
-                   and regarded as a unit for graphing purposes;
-                   OR a list of graphite-ids that each should be regarded as
-                   their own unit for graphing purposes.
-    :param keys:   if given, the graphite-ids are assumed to be nonleaf nodes
-                   and each unit + key combination is what becomes regarded as
-                   a unit (and summed if consisting of multiple graphite-ids)
-                   for graphing purposes.
+    :param parents_to_bundle: aliased bundles of graphite paths that should be
+                              summed and graphed together.
+    :param ratios: For each pair, the first element is a metric
     :param title:  title of the graph.
     """
-    series_ = iter(series)
-    try:
-        first = next(series_)
-        series_ = chain([first], series_)
-    except StopIteration:
-        return
-
     targets = []
-    match first:
-        case (_, _) if keys is not None:
-            targets.extend(
-                f"aliasQuery(sumSeries({paths}), , sumSeries({denominators}),'renderer=area;;{alias} {key} (out of %d {denominator})')"
-                for key, denominator in keys
-                for alias, ids in series_
-                for paths, denominators in zip(",".join(f"{id}.{key}"
-                                                for id in ids),
-                                               ",".join(f"{id}.{denominator}"
-                                                for id in ids))
+
+    if ratios is None:
+        for alias, bundle in parents_to_bundle:
+            targets.append(f"alias(sumSeries{','.join(bundle)}, '{alias}')")
+    else:
+        for suffix, superset_suffix in ratios:
+            for alias, bundle in parents_to_bundle:
+                leaves = ",".join(f"{parent}.{suffix}" for parent in bundle)
+                superset_leaves = ",".join(
+                    f"{parent}.{superset_suffix}" for parent in bundle
+                )
+                target = (
+                    f"aliasQuery(sumSeries({leaves}), , sumSeries({superset_leaves}), "
+                    f"'renderer=area;;{alias} ({suffix} out of %d {superset_suffix})')"
+                )
+                targets.append(target)
+
+        for superset_suffix in set(s for _, s in ratios):
+            superset_leaves = ",".join(
+                f"{parent}.{superset_suffix}"
+                for _, bundle in parents_to_bundle
+                for parent in bundle
             )
-            targets.append(
-                f"alias(sumSeries({}, {})"
-            )
-        case (_, _):
-            targets.extend(
-                f"alias(sumSeries({joined}), 'renderer=area;;{alias}')"
-                for alias, ids in series_
-                for joined in (",".join(ids))
-            )
+            target = f"alias(sumSeries({superset_leaves}), '{superset_suffix}')"
+            targets.append(target)
+
+    if len(targets) == 0:
+        return
+    return get_simple_graph_url(targets, title=title)
