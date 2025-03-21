@@ -10,6 +10,7 @@ from typing import Union, Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
 
+#TODO: Test _create_session
 
 class TestRecognizableAPIResponses:
     """

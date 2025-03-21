@@ -1536,14 +1536,9 @@ class Vlan(models.Model):
         """Fetches the graph urls for graphing this vlan"""
         return [url for url in [self.get_graph_url(f) for f in [4, 6]] if url]
 
-    def get_graph_url(self, family=4, data_origin="snmp"):
+    def get_graph_url(self, family=4):
         """Creates a graph url for the given family with all prefixes stacked"""
         assert family in [4, 6]
-        assert data_origin in ["snmp", "dhcp"]
-
-        family = 4
-        data_origin = "dhcp"
-
         prefixes = self.prefixes.extra(where=["family(netaddr)=%s" % family])
         # Put metainformation in the alias so that Rickshaw can pick it up and
         # know how to draw the series.
@@ -1554,18 +1549,8 @@ class Vlan(models.Model):
             )
             for prefix in prefixes
         ]
-        # TODO: don't above code if data_origin == "dhcp"
-        if data_origin == "dhcp":
-            series = [
-                "alias(sumSeries({}), 'renderer=area;;{}')".format(
-                    overlapped_subnet_dhcp_series(prefix.net_address, "assigned"),
-                    prefix.net_address,
-                )
-                for prefix in prefixes
-            ]
-
         if series:
-            if family == 4 and data_origin == "snmp":
+            if family == 4:
                 series.append(
                     "alias(sumSeries(%s), 'Max addresses')"
                     % ",".join(
@@ -1575,25 +1560,40 @@ class Vlan(models.Model):
                         ]
                     )
                 )
-            elif family == 4 and data_origin == "dhcp":
-                series.append(
-                    "alias(sumSeries({}), 'Max addresses')".format(
-                        ",".join(
-                            [
-                                overlapped_subnet_dhcp_series(prefix.net_address, "total")
-                                for prefix in prefixes
-                            ]
-                        ),
-                    ),
-                )
-
             return get_simple_graph_url(
                 series,
-                title="Total IPv{} addresses on vlan {} ({} data) - stacked".format(
-                    family, str(self), data_origin
+                title="Total IPv{} addresses on vlan {} - stacked".format(
+                    family, str(self)
                 ),
                 format='json',
             )
+
+    def get_dhcp_graph_url(self, family=4):
+        """Creates a graph url with dhcp stats for the given family"""
+        assert family in [4]
+
+        def unescape_prefix(escaped_prefix):
+            parts = escaped_prefix.split("_")
+            return IPy.IP(".".join(parts[:4]) + "/" + str(parts[4]))
+
+        our_prefixes = IPy.IPSet(
+            IPy.IP(prefix)
+            for prefix in self.prefixes.extra(where=["family(netaddr)=%s" % family])
+        )
+
+        if len(our_prefixes) == 0:
+            return
+
+        their_prefixes = (
+            (path, unescape_prefix(path.split(".")[-1]))
+            for path in get_metric_nonleaf_children("nav.dhcp.subnet")
+        )
+        return stacked_graph(
+            (our, (path for path, their in their_prefixes if their in our))
+            for our in our_prefixes,
+            keys=[("assigned", "total")],
+            title=f"DHCPv4 assigned addresses on vlan {self} - stacked",
+        )
 
 
 class NetType(models.Model):
