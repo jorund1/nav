@@ -41,8 +41,8 @@ from django.urls import reverse
 from nav import util
 from nav.bitvector import BitVector
 from nav.metrics.data import get_netboxes_availability
-from nav.metrics.graphs import get_simple_graph_url, Graph
-from nav.metrics.names import get_all_leaves_below
+from nav.metrics.graphs import get_simple_graph_url, get_stacked_graph_url, Graph
+from nav.metrics.names import get_all_leaves_below, get_metric_nonleaf_children
 from nav.metrics.templates import (
     metric_prefix_for_interface,
     metric_prefix_for_ports,
@@ -51,7 +51,6 @@ from nav.metrics.templates import (
     metric_path_for_sensor,
     metric_path_for_prefix,
     metric_path_for_power,
-    overlapped_subnet_dhcp_series,
 )
 import nav.natsort
 from nav.models.fields import DateTimeInfinityField, VarcharField, PointField
@@ -1534,7 +1533,8 @@ class Vlan(models.Model):
 
     def get_graph_urls(self):
         """Fetches the graph urls for graphing this vlan"""
-        return [url for url in [self.get_graph_url(f) for f in [4, 6]] if url]
+        #        return [url for url in [self.get_graph_url(f) for f in [4, 6]] if url]
+        return [url for url in [self.get_dhcp_graph_url(f) for f in [4]] if url]
 
     def get_graph_url(self, family=4):
         """Creates a graph url for the given family with all prefixes stacked"""
@@ -1577,8 +1577,10 @@ class Vlan(models.Model):
             return IPy.IP(".".join(parts[:4]) + "/" + str(parts[4]))
 
         our_prefixes = IPy.IPSet(
-            IPy.IP(prefix)
-            for prefix in self.prefixes.extra(where=["family(netaddr)=%s" % family])
+            [
+                IPy.IP(prefix.net_address)
+                for prefix in self.prefixes.extra(where=["family(netaddr)=%s" % family])
+            ]
         )
 
         if len(our_prefixes) == 0:
@@ -1588,10 +1590,13 @@ class Vlan(models.Model):
             (path, unescape_prefix(path.split(".")[-1]))
             for path in get_metric_nonleaf_children("nav.dhcp.subnet")
         )
-        return stacked_graph(
-            (our, (path for path, their in their_prefixes if their in our))
-            for our in our_prefixes,
-            keys=[("assigned", "total")],
+
+        return get_stacked_graph_url(
+            [
+                (our, [path for path, their in their_prefixes if their in our])
+                for our in our_prefixes
+            ],
+            ratios=[("assigned", "total")],
             title=f"DHCPv4 assigned addresses on vlan {self} - stacked",
         )
 
