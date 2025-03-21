@@ -86,10 +86,9 @@ class Client:
     def fetch_stats(self) -> list[tuple[str, tuple[float, int]]]:
         """
         Fetches and returns a list containing the most recent DHCP
-        stats for each subnet + stat name combination managed by
-        the Kea DHCP server.
+        stats for each subnet + stat name combination.
 
-        If the Kea Control Agent responds with an empty response to
+        If the Kea API responds with an empty response to
         one or more of the requests for some stat(s), these stats
         will be missing in the returned list, but a list is still
         succesfully returned. Other errors while requesting stats
@@ -100,7 +99,7 @@ class Client:
         Communication errors (HTTP errors, JSON errors, access control
         errors, unexpected responses) causes a KeaException to be raised.
 
-        If the Kea Control Agent doesn't support the bare-minimum set of
+        If the Kea API doesn't support the bare-minimum set of
         commands this client needs for fetching stats, then a KeaUnsupported
         exception is raised.
         """
@@ -132,7 +131,7 @@ class Client:
         self._session = None
         end_time = datetime.now().timestamp()
         _logger.info(
-            "Fetched %d stats(s) for %d subnet(s) in %f seconds from %s",
+            "Fetched %d stats(s) for %d subnet(s) in %.2f seconds from %s",
             len(stats),
             len(subnets),
             end_time - start_time,
@@ -173,7 +172,7 @@ class Client:
     def _fetch_config(self) -> dict:
         """
         Returns the current config of the Kea DHCP server that the Kea
-        Control Agent controls.
+        API serves.
         """
         if (
             self._dhcp_config is None
@@ -192,7 +191,7 @@ class Client:
     def _fetch_config_hash(self) -> Optional[str]:
         """
         Returns the hash of the current config of the Kea DHCP server
-        that the Kea Control Agent controls.
+        that the Kea API serves.
         """
         try:
             return (
@@ -206,7 +205,7 @@ class Client:
 
     def _send_query(self, command: str, **kwargs) -> dict:
         """
-        Returns the API response from the Kea Control Agent to the
+        Returns the API response from the Kea API to the
         query with command `command` instructed towards the Kea DHCP server.
         Additional keyword arguments to this function will be passed as
         arguments to the command.
@@ -216,7 +215,7 @@ class Client:
         raised. If possible, it is reraised from a more descriptive error such
         as an HTTPError.
 
-        Valid Kea Control Agent responses that indicate a failure on the
+        Valid Kea API responses that indicate a failure on the
         server-end causes a descriptive subclass of KeaException to be raised.
         """
         assert self._session is not None
@@ -274,7 +273,7 @@ class Client:
                 # See https://kea.readthedocs.io/en/kea-2.6.0/arm/ctrl-channel.html#control-agent-command-response-format
                 raise KeaException(f"{responses['result']}: {responses['text']}")
             raise KeaException(
-                "%s does not look like a Kea Control Agent; "
+                "%s does not look like a Kea API; "
                 "response JSON structured in an unknown way",
                 self._url
             )
@@ -377,7 +376,7 @@ class KeaConflict(KeaException):
 
 
 class _KeaStatus(IntEnum):
-    """Status of a response sent from a Kea Control Agent"""
+    """Status of a response sent from a Kea API"""
 
     SUCCESS = 0
     ERROR = 1
