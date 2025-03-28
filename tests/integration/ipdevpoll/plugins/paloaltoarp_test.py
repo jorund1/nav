@@ -178,6 +178,13 @@ class TestEndToEnd:
         assert sorted(actual) == sorted(expected)
 
 
+class TestTLS:
+    """Tests that the plugin uses TLS as expected"""
+    @pytest.fixture
+    def test_do_request_should_not_accept_invalid_cert_by_default(https_server):
+        pass
+
+
 valid_http_response_body = b'''
     <response status="success">
     <result>
@@ -355,3 +362,81 @@ def blank_management_profile():
     profile.save()
     yield profile
     profile.delete()
+
+
+@pytest.fixture
+def https_server():
+    class Root(resource.Resource):
+        isLeaf = True
+
+        def render_GET(self, request):
+            return b"get"
+
+        def render_POST(self, request):
+            return b"post"
+
+    certificate = ssl.PrivateCertificate.loadPEM(ssl_key + ssl_cert)
+    endpoint = SSL4ServerEndpoint(reactor, 0, certificate.options())
+    d = endpoint.listen(server.Site(Root()))
+    d.addCallback(lambda sock: sock.getHost().port)
+
+    yield d, ssl_cert
+
+    d.result.stopListening()
+
+
+ssl_key = """\
+-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCVyc3xma1h++L4
+Ky+idwK80vKCYyjQsS2renUWbB+29gLQpntn4oN7KMxejgArGCzulJcQDIRBxhMo
+DycjhEemRGlu7Bpvn+Zf1EYNKtP64mMOEXlIw6yLOqSRUgMedfxtOBabUEpzR26a
+/Jmlb8jf5xKbdKizrJvwXm8wXw1/WeyxJ6+CCc2hm5KZ6AXNZry/j4H9KeHTlp40
+ZzDwV3EHmXbw3xfWbt8IHw0R4cGZZK+Xs5Szof93fV7BcY4eEO53VGiNz0KHpjst
+kKWWAhTMPHghsCc2Kwv4ThEoRiJAsSHJZu2l3aVq49/CYorOqfzLB+OhmYN1ocWW
+WzKYfp73AgMBAAECggEAGdr2RhRpVccFdCH8PHZ/jfl5q+ES7AcRY46lRGQQi2Pm
+s35xQcrbODigIlgvlkC7jMkwVDBc6f+XUexfrKVKOtyHOILfw1HeEb+SAfbZFW7b
+e1Ov1EwWbggG3SDDchAarP2oBVI0L7buVClzGhf0HBYGY7gc4LrURgb++WIG8erf
+qfNrwuaXo7PESlfhHW8xwWWuwxgZiieU9XHCP4MnGzlCItEbUFIh0uC5Sdct4eSm
+8g3iNONMC5G4nSW0GxYb7+Tm4XJN/M+ytAzxtIg3xsxvoQHZS4DCtTHxOGlfGsAP
+jk3Zg46VBgXowVCgML1p9Ytyz2G1jqOqA4OxwyBidQKBgQDKEVBj+ZB1SNCotoCn
+iSulJbpcmmMxwWjBJYPCcv44+Ksj91DYoD6prXJ+02SdrHsv9bXPTs39vMUBUW6S
+VR1ZNbGI/Hh/ek6fatmX6qGAd6W9UhD8PEaOLNOYWifzqWT87QQt8dJjUM+wUczT
+KBME2+6CRrw1s4x9uD0IErvXpQKBgQC9xGXHbJYHCuFXB40U8FLfMahV2kmTYcbf
+YIsRrbXxKW79PXCNuj71tSK/XFabpZ20HjXXhokDU+sKVRvhxteRF6lZvQKjEtNk
+r25cTwPtBxaOVVeJoPekjKeTN6w021GoozDjW9Spcy9yreRJvZz7yDBxgVLMmg6o
+dYSdzYz5awKBgADwvbAJbEuvcBEo8EZXVBWrrEdcDJQhs0wa0ZcpE9fOCHXdY8nu
+TPxbK0o9z50QPW6GtTbmxfylUUFlUJ9rt/w/TLk3e5QUTKNfSu3zEJdZdzL/W8bg
+vO9SdBWkbcUrh6XJsJhKJNGDgcPvTYW6DQSbxWtjyuJxGHlJTzdnZuplAoGAKePn
+38ztlWJmefK1xxCCCrkIguMr6Lfl0bubF2z0Q+c0k/xzEyYw7cZthDaa+8LkfDVL
+B2ewaSamNOKyw/VD8sh5XtDleyAVwB0lzIS4xiMRbJwUNdJtuEpAV7QrdIORlBtq
+GFZWLI27xKH0Sf7sX3xCjVvR7k53u+ItQzRz0T8CgYEAk8jlmlAOieV6OKXJiscy
+fey9rNHsjIzHkfyC81xmqzGgvY/KYM+8p3U2v64AXtXm3oSQWMyjhgZJhcILaLG8
+KOUjSICfysdHtanRlk1o0WpqZka+Q0CT2IbOStDhSgbyfU8NtcR6lMkZIAkEpCJj
+OeGpR5j+rPMHW9Fy5Ckrs8g=
+-----END PRIVATE KEY-----
+"""
+
+ssl_cert = """\
+-----BEGIN CERTIFICATE-----
+MIIDtzCCAp+gAwIBAgIUNZh5bzX0uAexkm8iXRSyEIxImVcwDQYJKoZIhvcNAQEL
+BQAwajELMAkGA1UEBhMCVVMxDzANBgNVBAgMBk9yZWdvbjERMA8GA1UEBwwIUG9y
+dGxhbmQxFTATBgNVBAoMDENvbXBhbnkgTmFtZTEMMAoGA1UECwwDT3JnMRIwEAYD
+VQQDDAlsb2NhbGhvc3QwIBcNMjUwMzI3MjA1OTUyWhgPOTk5OTEyMzExMTU5NTla
+MGoxCzAJBgNVBAYTAlVTMQ8wDQYDVQQIDAZPcmVnb24xETAPBgNVBAcMCFBvcnRs
+YW5kMRUwEwYDVQQKDAxDb21wYW55IE5hbWUxDDAKBgNVBAsMA09yZzESMBAGA1UE
+AwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlcnN
+8ZmtYfvi+CsvoncCvNLygmMo0LEtq3p1FmwftvYC0KZ7Z+KDeyjMXo4AKxgs7pSX
+EAyEQcYTKA8nI4RHpkRpbuwab5/mX9RGDSrT+uJjDhF5SMOsizqkkVIDHnX8bTgW
+m1BKc0dumvyZpW/I3+cSm3Sos6yb8F5vMF8Nf1nssSevggnNoZuSmegFzWa8v4+B
+/Snh05aeNGcw8FdxB5l28N8X1m7fCB8NEeHBmWSvl7OUs6H/d31ewXGOHhDud1Ro
+jc9Ch6Y7LZCllgIUzDx4IbAnNisL+E4RKEYiQLEhyWbtpd2lauPfwmKKzqn8ywfj
+oZmDdaHFllsymH6e9wIDAQABo1MwUTAdBgNVHQ4EFgQUcI/qyk6DI5KAQlCYreAZ
+S0283aAwHwYDVR0jBBgwFoAUcI/qyk6DI5KAQlCYreAZS0283aAwDwYDVR0TAQH/
+BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAeDwHHZIHvI92kyRzzdLg3FEuBlH7
+Er3trxBGLRyMibVa+iDl46gNkIVoUFfVeUUMAECFhgHnAsZjfDc40kStYgG6dFmE
+ppbKfcPl8Yx+fMGgK4SFyYzHvruZNILE1ATvkrwdoDb+mOtzVHVh4QaOL60okIhS
+BJBpDkRqDmF5b+KlPTf0dDfa61L3zj99qmgKTpIzxx0lx6De4QnIEKB8ilSdrmw6
+1nndctd3zx5Sa809tv2G7UTbP+r3PhuggjkPeAM8KFcwsefHmtpI9qf86RtSO+XI
+eKEAkZvJH8+MKPekl45AOkuX9JQ4vus7jkR9PP7FJCgpCVvix4TPjZCUvg==
+-----END CERTIFICATE-----
+"""
