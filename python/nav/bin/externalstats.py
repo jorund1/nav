@@ -67,7 +67,8 @@ def collect_metrics(config):
         kwargs = {opt: val for opt, val in options.items() if opt != "type"}
         cls = FETCHERS[type]
         fetcher = cls(**kwargs)
-        stats.extend(fetcher.fetch_stats)
+        stats.extend(fetcher.fetch_stats())
+
 
     carbon.send_metrics(stats)
 
