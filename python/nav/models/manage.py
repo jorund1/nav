@@ -1533,8 +1533,7 @@ class Vlan(models.Model):
 
     def get_graph_urls(self):
         """Fetches the graph urls for graphing this vlan"""
-        #        return [url for url in [self.get_graph_url(f) for f in [4, 6]] if url]
-        return [url for url in [self.get_dhcp_graph_url(f) for f in [4]] if url]
+        return [url for url in [self.get_graph_url(f) for f in [4, 6]] if url]
 
     def get_graph_url(self, family=4):
         """Creates a graph url for the given family with all prefixes stacked"""
@@ -1565,13 +1564,23 @@ class Vlan(models.Model):
                 title="Total IPv{} addresses on vlan {} - stacked".format(
                     family, str(self)
                 ),
-                format='json',
+
+format='json',
             )
 
     def get_dhcp_graph_url(self, family=4):
         """Creates a graph url with dhcp stats for the given family"""
         assert family in [4]
+        return get_simple_graph_url(["alias(nav.dhcp.subnet.172_31_255_0_24.assigned, '172.31.255.0/24')"], title=f"DHCPv4 assigned addresses on vlan {self}", format="json")
 
+
+    def has_dhcp_stats(self):
+        """Returns True if any DHCP statistic exists"""
+        return any(paths for prefix, paths in self.get_dhcp_metric_paths())
+
+    #TODO: Cache
+    def get_dhcp_metric_paths(self):
+        """Returns a tuple with metric paths for total, assigned, and declined stats"""
         def unescape_prefix(escaped_prefix):
             parts = escaped_prefix.split("_")
             return IPy.IP(".".join(parts[:4]) + "/" + str(parts[4]))
@@ -1579,26 +1588,26 @@ class Vlan(models.Model):
         our_prefixes = IPy.IPSet(
             [
                 IPy.IP(prefix.net_address)
-                for prefix in self.prefixes.extra(where=["family(netaddr)=%s" % family])
+                for prefix in self.prefixes.extra(where=["family(netaddr)=%s" % 4])
             ]
         )
+        _logger.warning("OUR PREFIXES: %s\n", our_prefixes)
 
         if len(our_prefixes) == 0:
-            return
+            return []
 
-        their_prefixes = (
+        their_prefixes = [
             (path, unescape_prefix(path.split(".")[-1]))
             for path in get_metric_nonleaf_children("nav.dhcp.subnet")
-        )
+        ]
+        _logger.warning("THEIR PREFIXES: %s\n", their_prefixes)
 
-        return get_stacked_graph_url(
-            [
-                (our, [path for path, their in their_prefixes if their in our])
-                for our in our_prefixes
-            ],
-            ratios=[("assigned", "total")],
-            title=f"DHCPv4 assigned addresses on vlan {self} - stacked",
-        )
+        if len(their_prefixes) == 0:
+            return []
+
+        for our in our_prefixes:
+            yield (our, [path for path, their in their_prefixes if their in our])
+
 
 
 class NetType(models.Model):
