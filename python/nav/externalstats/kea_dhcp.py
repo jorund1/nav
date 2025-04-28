@@ -19,6 +19,7 @@ Fetch DHCP stats from Kea DHCP servers through the Kea API
 
 from dataclasses import dataclass
 from datetime import datetime
+import time
 from enum import IntEnum
 from itertools import chain
 import json
@@ -104,7 +105,9 @@ class Client:
         exception is raised.
         """
         self._session = self._create_session()
-        start_time = datetime.now().timestamp()
+        start_time = time.time()
+        local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
+        start_time = start_time + local_tz_offset
 
         config = self._fetch_config()
         subnets = self._subnets_of_config(config)
@@ -116,7 +119,7 @@ class Client:
                 if value is None:
                     continue
                 path = metric_path_for_subnet_dhcp(subnet.prefix, stat_name)
-                stats.append((path, (start_time, value)))
+                stats.append((path, (int(start_time), value)))
 
         maybe_updated_config = self._fetch_config()
         maybe_updated_subnets = self._subnets_of_config(maybe_updated_config)
@@ -129,7 +132,9 @@ class Client:
 
         self._session.close()
         self._session = None
-        end_time = datetime.now().timestamp()
+        end_time = time.time()
+        local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
+        end_time = end_time + local_tz_offset
         _logger.info(
             "Fetched %d stats(s) for %d subnet(s) in %.2f seconds from %s",
             len(stats),

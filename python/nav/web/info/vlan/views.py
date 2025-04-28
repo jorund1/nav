@@ -115,6 +115,13 @@ def vlan_details(request, vlanid):
 
     navpath = get_path([(str(vlan), '')])
 
+    try:
+        has_dhcp_stats = vlan.has_dhcp_stats()
+        graphite_error = False
+    except GraphiteUnreachableError:
+        has_dhcp_stats = False
+        graphite_error = True
+
     return render(
         request,
         'info/vlan/vlandetails.html',

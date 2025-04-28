@@ -366,7 +366,7 @@ def get_stacked_graph_url(
 
     if ratios is None:
         for alias, bundle in parents_to_bundle:
-            targets.append(f"alias(sumSeries{','.join(bundle)}, '{alias}')")
+            targets.append(f"alias(sumSeries({','.join(bundle)}), '{alias}')")
     else:
         for suffix, superset_suffix in ratios:
             for alias, bundle in parents_to_bundle:
@@ -375,7 +375,7 @@ def get_stacked_graph_url(
                     f"{parent}.{superset_suffix}" for parent in bundle
                 )
                 target = (
-                    f"aliasQuery(sumSeries({leaves}), , sumSeries({superset_leaves}), "
+                    f"aliasQuery(sumSeries({leaves}),,sumSeries({superset_leaves}), "
                     f"'renderer=area;;{alias} ({suffix} out of %d {superset_suffix})')"
                 )
                 targets.append(target)
@@ -391,4 +391,4 @@ def get_stacked_graph_url(
 
     if len(targets) == 0:
         return
-    return get_simple_graph_url(targets, title=title)
+    return get_simple_graph_url(targets, title=title, format="json")
