@@ -41,7 +41,7 @@ from django.urls import reverse
 from nav import util
 from nav.bitvector import BitVector
 from nav.metrics.data import get_netboxes_availability
-from nav.metrics.graphs import get_simple_graph_url, get_stacked_graph_url, Graph
+from nav.metrics.graphs import get_simple_graph_url, Graph
 from nav.metrics.names import get_all_leaves_below, get_metric_nonleaf_children
 from nav.metrics.templates import (
     metric_prefix_for_interface,
@@ -1538,76 +1538,118 @@ class Vlan(models.Model):
     def get_graph_url(self, family=4):
         """Creates a graph url for the given family with all prefixes stacked"""
         assert family in [4, 6]
+        from nav.metrics.graphs import sealed_series, summed_series, json_url
+
         prefixes = self.prefixes.extra(where=["family(netaddr)=%s" % family])
         # Put metainformation in the alias so that Rickshaw can pick it up and
         # know how to draw the series.
         series = [
-            "alias({}, 'renderer=area;;{}')".format(
+            sealed_series(
                 metric_path_for_prefix(prefix.net_address, 'ip_count'),
-                prefix.net_address,
+                name=prefix.net_address,
+                renderer="area",
             )
             for prefix in prefixes
         ]
-        if series:
-            if family == 4:
-                series.append(
-                    "alias(sumSeries(%s), 'Max addresses')"
-                    % ",".join(
-                        [
-                            metric_path_for_prefix(prefix.net_address, 'ip_range')
-                            for prefix in prefixes
-                        ]
-                    )
-                )
-            return get_simple_graph_url(
-                series,
-                title="Total IPv{} addresses on vlan {} - stacked".format(
-                    family, str(self)
-                ),
 
-format='json',
-            )
+        if not series:
+            return
+
+        if family == 4:
+            ip_ranges = [
+                metric_path_for_prefix(prefix.net_address, 'ip_range')
+                for prefix in prefixes
+            ]
+            series.append(sealed_series(summed_series(ip_ranges), name="Max addresses"))
+
+        title = f"Total IPv{family} addresses on vlan {str(self)} - stacked"
+
+        return json_url(*series, title=title)
 
     def get_dhcp_graph_url(self, family=4):
         """Creates a graph url with dhcp stats for the given family"""
         assert family in [4]
-        return get_simple_graph_url(["alias(nav.dhcp.subnet.172_31_255_0_24.assigned, '172.31.255.0/24')"], title=f"DHCPv4 assigned addresses on vlan {self}", format="json")
 
+    #        from nav.metrics.graphs import sealed_series, summed_series, json_url
+
+    #        pools = self.get_dhcp_pools()
 
     def has_dhcp_stats(self):
         """Returns True if any DHCP statistic exists"""
-        return any(paths for prefix, paths in self.get_dhcp_metric_paths())
+        return bool(self.get_dhcp_pools())
 
-    #TODO: Cache
-    def get_dhcp_metric_paths(self):
-        """Returns a tuple with metric paths for total, assigned, and declined stats"""
-        def unescape_prefix(escaped_prefix):
+    # TODO: Cache
+    # TODO: Do we need to assert that all vlan subnets stored in NAV are disjoint or must we check it here
+    #      so as to avoid potential duplicate graphite subnets/pools in the return value?
+    def get_dhcp_pools(self) -> dict[IPy.IP, dict[IPy.IP, list[tuple[IPy.IP, IPy.IP]]]]:
+        """
+        Fetches all subnets and their respective pools that are stored under
+        'nav.dhcp.subnet.*.pools.*' in graphite and that are contained by some
+        subnet of this vlan. The returned dict has the following structure:
+
+        {
+          <nav-prefix-1>: {
+            <contained-graphite-prefix-1>: [
+              <contained-graphite-pool-1>,
+              <contained-graphite-pool-2>,
+            ],
+            <contained-graphite-prefix-2>: [
+              <contained-graphite-pool-3>,
+              <contained-graphite-pool-4>,
+            ]
+          }
+          <nav-prefix-2>: {
+            ...
+          }
+          ...
+        }
+        """
+
+        def unescape_prefix(escaped_prefix: str) -> IPy.IP:
             parts = escaped_prefix.split("_")
             return IPy.IP(".".join(parts[:4]) + "/" + str(parts[4]))
 
+        def unescape_pool(escaped_pool: str) -> tuple[IPy.IP, IPy.IP]:
+            escaped_addrs = escaped_pool.split("-")
+            start_addr = IPy.IP(".".join(escaped_addrs[0].split("_")))
+            end_addr = IPy.IP(".".join(escaped_addrs[1].split("_")))
+            return (start_addr, end_addr)
+
+        # Prefixes stored in the nav database for this VLAN
         our_prefixes = IPy.IPSet(
             [
                 IPy.IP(prefix.net_address)
                 for prefix in self.prefixes.extra(where=["family(netaddr)=%s" % 4])
             ]
         )
-        _logger.warning("OUR PREFIXES: %s\n", our_prefixes)
 
         if len(our_prefixes) == 0:
-            return []
+            return {}
 
+        # Prefixes and pools stored in graphite
         their_prefixes = [
-            (path, unescape_prefix(path.split(".")[-1]))
-            for path in get_metric_nonleaf_children("nav.dhcp.subnet")
+            (unescape_prefix(path.split(".")[-3]), unescape_pool(path.split(".")[-1]))
+            for path in get_metric_nonleaf_children("nav.dhcp.subnet.*.pools")
         ]
-        _logger.warning("THEIR PREFIXES: %s\n", their_prefixes)
 
         if len(their_prefixes) == 0:
-            return []
+            return {}
 
-        for our in our_prefixes:
-            yield (our, [path for path, their in their_prefixes if their in our])
+        # Prefixes stored in the nav database for this vlan
+        #   -> Prefixes stored in graphite that are contained by vlan prefix
+        #     -> Pools stored in graphite that are contained by graphite prefix
+        prefix_pools_map: dict[IPy.IP, dict[IPy.IP, list[tuple[IPy.IP, IPy.IP]]]] = {}
 
+        for our_prefix in our_prefixes:
+            for their_prefix, their_pool in their_prefixes:
+                if their_prefix in our_prefix:
+                    their_prefix_pools_map = prefix_pools_map.setdefault(our_prefix, {})
+                    their_prefix_pools = their_prefix_pools_map.setdefault(
+                        their_prefix, []
+                    )
+                    their_prefix_pools.append(their_pool)
+
+        return prefix_pools_map
 
 
 class NetType(models.Model):
