@@ -18,7 +18,6 @@
 import argparse
 import logging
 from functools import partial
-from dataclasses import replace
 
 from nav.config import getconfig
 from nav.externalstats import kea_dhcp
@@ -33,6 +32,7 @@ FETCHERS = {
     "kea-dhcp4": partial(kea_dhcp.Client, dhcp_version=4),
 }
 
+
 def main():
     """
     Collects current metrics from each endpoint configured in
@@ -40,14 +40,16 @@ def main():
     """
     init_generic_logging(logfile=LOGFILE)
     config = getconfig(CONFIGFILE)
-    args = parse_args()
+    _ = parse_args()
     collect_metrics(config)
+
 
 def parse_args():
     """Builds an ArgumentParser and returns parsed program arguments"""
     # Include this mainly for --help option
     parser = argparse.ArgumentParser(description=main.__doc__.strip())
     return parser.parse_args()
+
 
 def collect_metrics(config):
     """
@@ -59,6 +61,7 @@ def collect_metrics(config):
 
     _logger.info("--> Starting metric collection <--")
 
+    # TODO: Multithread
     stats = []
     for name, options in config.items():
         if not name.startswith("endpoint_"):
@@ -68,7 +71,6 @@ def collect_metrics(config):
         cls = FETCHERS[type]
         fetcher = cls(**kwargs)
         stats.extend(fetcher.fetch_stats())
-
 
     carbon.send_metrics(stats)
 

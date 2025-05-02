@@ -17,7 +17,7 @@
 """Getting graphs of NAV-collected data from Graphite"""
 
 import re
-from typing import Any, Sequence
+from typing import Iterable
 
 from django.urls import reverse
 from urllib.parse import urlencode
@@ -351,44 +351,47 @@ def translate_serieslist_to_regex(series):
     return re.compile(pat)
 
 
-def get_stacked_graph_url(
-    parents_to_bundle: Sequence[tuple[Any, Sequence[str]]],
-    ratios: Sequence[tuple[str, str]] | None = None,
-    title: str = "",
-) -> str | None:
-    """
-    :param parents_to_bundle: aliased bundles of graphite paths that should be
-                              summed and graphed together.
-    :param ratios: For each pair, the first element is a metric
-    :param title:  title of the graph.
-    """
-    targets = []
-
-    if ratios is None:
-        for alias, bundle in parents_to_bundle:
-            targets.append(f"alias(sumSeries({','.join(bundle)}), '{alias}')")
+def flattened(fluffy):
+    flattenedes = []
+    if isinstance(fluffy, Iterable) and not isinstance(fluffy, str):
+        for elem in fluffy:
+            flattenedes.extend(flattened(elem))
     else:
-        for suffix, superset_suffix in ratios:
-            for alias, bundle in parents_to_bundle:
-                leaves = ",".join(f"{parent}.{suffix}" for parent in bundle)
-                superset_leaves = ",".join(
-                    f"{parent}.{superset_suffix}" for parent in bundle
-                )
-                target = (
-                    f"aliasQuery(sumSeries({leaves}),,sumSeries({superset_leaves}), "
-                    f"'renderer=area;;{alias} ({suffix} out of %d {superset_suffix})')"
-                )
-                targets.append(target)
+        flattenedes.append(fluffy)
+    return flattenedes
 
-        for superset_suffix in set(s for _, s in ratios):
-            superset_leaves = ",".join(
-                f"{parent}.{superset_suffix}"
-                for _, bundle in parents_to_bundle
-                for parent in bundle
-            )
-            target = f"alias(sumSeries({superset_leaves}), '{superset_suffix}')"
-            targets.append(target)
 
-    if len(targets) == 0:
-        return
-    return get_simple_graph_url(targets, title=title, format="json")
+def sealed_series(*series: list[str] | str, name: str, **meta: str) -> list[str]:
+    tmpl = "alias({path}, '{name}')"
+    if len(meta) > 0:
+        name = ";;".join(f"{key}={val}" for key, val in meta.items()) + ";;" + name
+    return [tmpl.format(path=path, name=name) for path in flattened(series)]
+
+
+def grouped_series(*series: list[str] | str) -> str:
+    tmpl = "group({paths})"
+    return tmpl.format(paths=",".join(flattened(series)))
+
+
+def summed_series(*series: list[str] | str) -> list[str]:
+    tmpl = "sumSeries({paths})"
+    return [tmpl.format(paths=",".join(flattened(series)))]
+
+
+def diffed_series(*series: list[str] | str) -> list[str]:
+    tmpl = "diffSeries({paths})"
+    return [tmpl.format(paths=",".join(flattened(series)))]
+
+
+def json_url(*series: list[str] | str, title: str) -> str:
+    return get_simple_graph_url(flattened(series), format="json", title=title)
+
+
+summed_series(["a"])
+
+sealed_series(
+    diffed_series("nav.total", summed_series("nav.a", "nav.b", "nav.c")),
+    name="abc",
+    renderer="area",
+)
+sealed_series(summed_series("nav.a"), name="abc", renderer="area")
