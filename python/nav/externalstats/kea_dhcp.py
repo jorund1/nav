@@ -14,7 +14,7 @@
 # along with NAV. If not, see <http://www.gnu.org/licenses/>.
 #
 """
-Fetch DHCP stats from Kea DHCP servers through the Kea API
+Fetch DHCP stats from Kea DHCP servers, using the Kea API
 """
 
 from dataclasses import dataclass
@@ -41,6 +41,9 @@ class _Subnet:
     prefix: IP
 
 
+_Metric = tuple[str, tuple[int, int]]
+
+
 class Client:
     """
     Fetches DHCP stats for each subnet managed by some Kea DHCP server by using
@@ -53,19 +56,16 @@ class Client:
 
     def __init__(
         self,
+        url: str,
         dhcp_version: int = 4,
-        url: str = "",
         http_basic_username: str = "",
         http_basic_password: str = "",
         client_cert_path: str = "",
         client_cert_key_path: str = "",
         timeout: int = 10,
     ):
-        if not url:
-            raise ValueError("No URL given")
-
-        self._dhcp_version: int = dhcp_version
         self._url: str = url
+        self._dhcp_version: int = dhcp_version
         self._http_basic_user: str = http_basic_username
         self._http_basic_password: str = http_basic_password
         self._client_cert_path: str = client_cert_path
@@ -84,33 +84,31 @@ class Client:
         else:
             raise ValueError(f"DHCPv{dhcp_version} is not supported")
 
-    def fetch_stats(self) -> list[tuple[str, tuple[float, int]]]:
+    def fetch_stats(self) -> list[_Metric]:
         """
-        Fetches and returns a list containing the most recent DHCP
-        stats for each subnet + stat name combination.
+        Fetches and returns a list containing the most recent DHCP stats for
+        each subnet + stat name combination.
 
-        If the Kea API responds with an empty response to
-        one or more of the requests for some stat(s), these stats
-        will be missing in the returned list, but a list is still
-        succesfully returned. Other errors while requesting stats
-        will cause a fitting subclass of KeaException to be raised.
+        If the Kea API responds with an empty response to one or more of the
+        requests for some stat(s), these stats will be missing in the returned
+        list, but a list is still succesfully returned. Other errors while
+        requesting stats will cause a fitting subclass of KeaException to be
+        raised:
 
-        Exceptions raised:
+        * Communication errors (HTTP errors, JSON errors, access control errors,
+          unexpected responses) causes KeaException to be raised.
 
-        Communication errors (HTTP errors, JSON errors, access control
-        errors, unexpected responses) causes a KeaException to be raised.
-
-        If the Kea API doesn't support the bare-minimum set of
-        commands this client needs for fetching stats, then a KeaUnsupported
-        exception is raised.
+        * A Kea API that doesn't support the bare-minimum set of commands this
+          client needs for fetching stats, causes KeaUnsupported to be raised.
         """
         self._session = self._create_session()
         start_time = time.time()
         local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
         start_time = start_time + local_tz_offset
 
-        config = self._fetch_config()
-        subnets = self._subnets_of_config(config)
+        # config = self._fetch_config()
+        # subnets = self._subnets_of_config(config)
+        subnets = self._fetch_subnets()
 
         stats = []
         for subnet in subnets:
@@ -121,8 +119,9 @@ class Client:
                 path = metric_path_for_subnet_dhcp(subnet.prefix, stat_name)
                 stats.append((path, (int(start_time), value)))
 
-        maybe_updated_config = self._fetch_config()
-        maybe_updated_subnets = self._subnets_of_config(maybe_updated_config)
+        # maybe_updated_config = self._fetch_config()
+        # maybe_updated_subnets = self._subnets_of_config(maybe_updated_config)
+        maybe_updated_subnets = self._fetch_subnets()
         if sorted(subnets) != sorted(maybe_updated_subnets):
             _logger.warning(
                 "Server's subnet configuration was modified during fetching of DHCP "
@@ -336,13 +335,16 @@ class Client:
         return session
 
 
-    def _subnets_of_config(self, config: dict) -> list[_Subnet]:
+    def _fetch_subnets(self) -> list[_Subnet]:
         """
         Returns a list containing one (subnet-id, subnet-prefix) tuple per
         subnet listed in the Kea DHCP configuration `config`.
         """
         subnets: list[_Subnet] = []
         subnetkey = f"subnet{self._dhcp_version}"
+
+        config = self._fetch_config()
+
         for subnet in chain.from_iterable(
             [config.get(subnetkey, [])]
             + [
@@ -352,6 +354,7 @@ class Client:
         ):
             subnet_id = subnet.get("id", None)
             netprefix = subnet.get("subnet", None)
+            pools =
             if subnet_id is None or netprefix is None:
                 _logger.warning(
                     "id and/or prefix missing from a subnet's configuration"
