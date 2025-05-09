@@ -25,6 +25,8 @@ from itertools import chain
 import json
 import logging
 from typing import Optional
+import re
+
 
 from IPy import IP
 from requests import RequestException, JSONDecodeError, Session
@@ -36,9 +38,36 @@ _logger = logging.getLogger(__name__)
 
 
 @dataclass(order=True, frozen=True)
+class _Pool:
+    """
+    A Kea DHCP configured pool
+    """
+
+    id: int
+    name: str
+    range_start: IP
+    range_end: IP
+
+    _cidr_pattern_kea = re.compile(r"\d+\.\d+\.\d+\.\d+/\d+")
+
+    @classmethod
+    def from_kea(cls, kea_pool: dict):
+        match kea_pool:
+            case {"pool": str(pool_range), "id": int(pool_id)}:
+                if cls._cidr_pattern_kea.fullmatch(pool_range):
+                    cidr = IP(pool_range)
+                    return cls(pool_id, "abc", cidr.start, cidr.end)
+
+
+@dataclass(order=True, frozen=True)
 class _Subnet:
+    """
+    A Kea DHCP configured subnet
+    """
+
     id: int
     prefix: IP
+    pools: list[_Pool]
 
 
 _Metric = tuple[str, tuple[int, int]]
@@ -143,9 +172,7 @@ class Client:
         )
         return stats
 
-    def _fetch_stat_value(
-        self, subnet: _Subnet, api_stat_name: str
-    ) -> Optional[int]:
+    def _fetch_stat_value(self, subnet: _Subnet, api_stat_name: str) -> Optional[int]:
         """
         Return the most recent stat value recorded by the Kea DHCP server for
         the given subnet and stat name.
@@ -222,7 +249,7 @@ class Client:
         Valid Kea API responses that indicate a failure on the
         server-end causes a descriptive subclass of KeaException to be raised.
         """
-        assert self._session is not None
+        session = self._session or self._create_session()
 
         _logger.debug("Sending command '%s' to Kea API at %s", command, self._url)
 
@@ -235,7 +262,7 @@ class Client:
         )
 
         try:
-            responses = self._session.post(
+            responses = session.post(
                 self._url,
                 data=post_data,
                 timeout=self._timeout,
@@ -252,10 +279,10 @@ class Client:
             responses = responses.json()
         except JSONDecodeError as err:
             raise KeaException(
-                    "%s does not look like a Kea API endpoint; "
-                    "response to command '%s' was not valid JSON",
-                    self._url,
-                    command,
+                "%s does not look like a Kea API endpoint; "
+                "response to command '%s' was not valid JSON",
+                self._url,
+                command,
             ) from err
         except RequestException as err:
             raise KeaException(err.strerror) from err
@@ -279,7 +306,7 @@ class Client:
             raise KeaException(
                 "%s does not look like a Kea API; "
                 "response JSON structured in an unknown way",
-                self._url
+                self._url,
             )
 
         response = responses[0]
@@ -307,6 +334,12 @@ class Client:
         raise KeaException("Unkown response status")
 
     def _create_session(self) -> Session:
+        """
+        Creates and returns a HTTP session for use with recurring HTTP requests
+        in the requests package
+        """
+        _logger.debug("Creating new HTTP session for use with Kea API at %s", self._url)
+
         session = Session()
 
         https = self._url.startswith("https://")
@@ -334,11 +367,10 @@ class Client:
 
         return session
 
-
     def _fetch_subnets(self) -> list[_Subnet]:
         """
-        Returns a list containing one (subnet-id, subnet-prefix) tuple per
-        subnet listed in the Kea DHCP configuration `config`.
+        Returns a list containing one _Subnet(subnet-id, subnet-prefix) instance
+        per subnet listed in the Kea DHCP configuration `config`.
         """
         subnets: list[_Subnet] = []
         subnetkey = f"subnet{self._dhcp_version}"
@@ -354,18 +386,26 @@ class Client:
         ):
             subnet_id = subnet.get("id", None)
             netprefix = subnet.get("subnet", None)
-            pools =
             if subnet_id is None or netprefix is None:
                 _logger.warning(
                     "id and/or prefix missing from a subnet's configuration"
                 )
                 continue
-            subnets.append(_Subnet(subnet_id, IP(netprefix)))
+            subnets.append(
+                _Subnet(subnet_id, IP(netprefix), list(self._iter_pools(subnet)))
+            )
+
         return subnets
+
+    def _iter_pools(self, subnet: dict):
+        subnet_pools = subnet.get("pools", [])
+        for pool in subnet_pools:
+            yield _Pool.from_kea(pool)
 
 
 class KeaException(GeneralException):
     """An unexpected error occurred when communicating with Kea"""
+
 
 class KeaError(KeaException):
     """Kea failed during command processing"""
