@@ -188,7 +188,7 @@ def metric_path_for_multicast_usage(group, sysname):
     )
 
 
-def metric_path_for_subnet_dhcp(subnet_prefix, metric_name):
+def metric_path_for_dhcp_pool(subnet_prefix, metric_name):
     tmpl = "nav.dhcp.subnet.{subnet_prefix}.{metric_name}"
     ip = IPy.IP(subnet_prefix)
     return tmpl.format(

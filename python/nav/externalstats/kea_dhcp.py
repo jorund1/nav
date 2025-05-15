@@ -32,7 +32,7 @@ from IPy import IP
 from requests import RequestException, JSONDecodeError, Session
 
 from nav.errors import GeneralException
-from nav.metrics.templates import metric_path_for_subnet_dhcp
+from nav.metrics.templates import metric_path_for_dhcp_pool
 
 _logger = logging.getLogger(__name__)
 
@@ -137,25 +137,26 @@ class Client:
 
         # config = self._fetch_config()
         # subnets = self._subnets_of_config(config)
-        subnets = self._fetch_subnets()
+        #subnets = self._fetch_subnets()
+        pools = self.fetch_address_pools()
 
         stats = []
-        for subnet in subnets:
+        for pool in lease_pools:
             for stat_name, api_naming in self._api_namings:
-                value = self._fetch_stat_value(subnet, api_naming)
+                value = self._fetch_stat_value(pool, api_naming)
                 if value is None:
                     continue
-                path = metric_path_for_subnet_dhcp(subnet.prefix, stat_name)
+                path = metric_path_for_dhcp_pool(pool.range_start, pool.range_end, stat_name)
                 stats.append((path, (int(start_time), value)))
 
         # maybe_updated_config = self._fetch_config()
         # maybe_updated_subnets = self._subnets_of_config(maybe_updated_config)
-        maybe_updated_subnets = self._fetch_subnets()
-        if sorted(subnets) != sorted(maybe_updated_subnets):
+        maybe_updated_pools = self._fetch_lease_pools()
+        if sorted(pools) != sorted(maybe_updated_pools):
             _logger.warning(
-                "Server's subnet configuration was modified during fetching of DHCP "
-                "stats. This may cause stats collected this run to be associated with "
-                "wrong subnet."
+                "The DHCP server's address pool configuration was modified while stats "
+                "were being fetched. This may cause stats collected during this run to "
+                "be associated with wrong address pool."
             )
 
         self._session.close()
@@ -164,9 +165,9 @@ class Client:
         local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
         end_time = end_time + local_tz_offset
         _logger.info(
-            "Fetched %d stats(s) for %d subnet(s) in %.2f seconds from %s",
+            "Fetched %d stats(s) for %d pool(s) in %.2f seconds from %s",
             len(stats),
-            len(subnets),
+            len(pools),
             end_time - start_time,
             self._url,
         )
