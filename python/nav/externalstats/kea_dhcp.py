@@ -75,12 +75,14 @@ _Metric = tuple[str, tuple[int, int]]
 
 class Client:
     """
-    Fetches DHCP stats for each subnet managed by some Kea DHCP server by using
+    Fetches DHCP stats for each address pool managed by some Kea DHCP server by using
     the Kea API
 
-    TODO: This client assumes no hooks have been installed. The lease-stats hook
-          is required for reliable stats when multiple servers share the same lease
-          database because the standard commands issue the cache, not the DB.
+    TODO: This client assumes no hooks have been installed into the Kea DHCP
+          server. The 'lease-stats' hook is required for reliable stats when
+          multiple servers share the same lease database because the standard
+          commands issue the cache, not the DB. This client does not support the
+          hook.
     """
 
     def __init__(
@@ -115,8 +117,15 @@ class Client:
 
     def fetch_stats(self) -> list[_Metric]:
         """
-        Fetches and returns a list containing the most recent DHCP stats for
-        each subnet + stat name combination.
+        Fetches and returns a list containing the most recent stats for each
+        DHCP address pool. The stats collected for each address pool are:
+
+        * The total amount of addresses in that pool.
+
+        * The amount of currently assigned (i.e. leased) addresses in that pool.
+
+        * The amount of declined (i.e. expired but not yet reclaimed by the DHCP
+          server) addresses in that pool.
 
         If the Kea API responds with an empty response to one or more of the
         requests for some stat(s), these stats will be missing in the returned
@@ -173,12 +182,12 @@ class Client:
         )
         return stats
 
-    def _fetch_stat_value(self, subnet: _Subnet, api_stat_name: str) -> Optional[int]:
+    def _fetch_stat_value(self, address_pool: _Pool, api_stat_name: str) -> Optional[int]:
         """
         Return the most recent stat value recorded by the Kea DHCP server for
-        the given subnet and stat name.
+        the given address pool and api stat name.
         """
-        full_name = f"subnet[{subnet.id}].{api_stat_name}"
+        full_name = f"subnet[{address_pool.id}].{api_stat_name}" #TODO: FIX
         try:
             response = self._send_query("statistic-get", name=full_name)
         except KeaEmpty:
@@ -190,9 +199,9 @@ class Client:
 
         if len(samples) == 0:
             _logger.info(
-                "No samples found when querying for '%s' in subnet '%s'",
+                "No samples found when querying for '%s' in subnet '%s'", #TODO: FIX
                 api_stat_name,
-                subnet.prefix,
+                address_pool.prefix, #TODO: FIX
             )
             return None
 
