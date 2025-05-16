@@ -24,9 +24,7 @@ from enum import IntEnum
 from itertools import chain
 import json
 import logging
-from typing import Optional
-import re
-
+from typing import Optional, Generator
 
 from IPy import IP
 from requests import RequestException, JSONDecodeError, Session
@@ -47,27 +45,6 @@ class _Pool:
     name: str
     range_start: IP
     range_end: IP
-
-    _cidr_pattern_kea = re.compile(r"\d+\.\d+\.\d+\.\d+/\d+")
-
-    @classmethod
-    def from_kea(cls, kea_pool: dict):
-        match kea_pool:
-            case {"pool": str(pool_range), "id": int(pool_id)}:
-                if cls._cidr_pattern_kea.fullmatch(pool_range):
-                    cidr = IP(pool_range)
-                    return cls(pool_id, "abc", cidr.start, cidr.end)
-
-
-@dataclass(order=True, frozen=True)
-class _Subnet:
-    """
-    A Kea DHCP configured subnet
-    """
-
-    id: int
-    prefix: IP
-    pools: list[_Pool]
 
 
 _Metric = tuple[str, tuple[int, int]]
@@ -107,6 +84,7 @@ class Client:
 
         self._dhcp_config: Optional[dict] = None
         self._session: Optional[Session] = None
+        self._start_time: float = -1
 
         if dhcp_version == 4:
             self._api_namings = (
@@ -145,26 +123,18 @@ class Client:
         start_time = time.time()
         local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
         start_time = start_time + local_tz_offset
+        self._start_time = start_time # TODO: Change to int
 
         # config = self._fetch_config()
         # subnets = self._subnets_of_config(config)
         # subnets = self._fetch_subnets()
-        pools = self.fetch_address_pools()
+        pools = self._fetch_pools()
 
         stats = []
-        for pool in lease_pools:
-            for stat_name, api_naming in self._api_namings:
-                value = self._fetch_stat_value(pool, api_naming)
-                if value is None:
-                    continue
-                path = metric_path_for_dhcp_pool(
-                    pool.range_start, pool.range_end, stat_name
-                )
-                stats.append((path, (int(start_time), value)))
+        for pool in pools:
+            stats.extend(self._fetch_pool_stats(pool))
 
-        # maybe_updated_config = self._fetch_config()
-        # maybe_updated_subnets = self._subnets_of_config(maybe_updated_config)
-        maybe_updated_pools = self._fetch_lease_pools()
+        maybe_updated_pools = self._fetch_pools()
         if sorted(pools) != sorted(maybe_updated_pools):
             _logger.warning(
                 "The DHCP server's address pool configuration was modified while stats "
@@ -175,8 +145,6 @@ class Client:
         self._session.close()
         self._session = None
         end_time = time.time()
-        local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
-        end_time = end_time + local_tz_offset
         _logger.info(
             "Fetched %d stats(s) for %d pool(s) in %.2f seconds from %s",
             len(stats),
@@ -186,7 +154,66 @@ class Client:
         )
         return stats
 
-    def _fetch_stat_value(
+    def _fetch_pools(self) -> Generator[_Pool]:
+        """
+        TODO: Change doc
+        Returns a list containing one _Subnet(subnet-id, subnet-prefix) instance
+        per subnet listed in the Kea DHCP configuration `config`.
+        """
+        config = self._fetch_config()
+        subnetkey = f"subnet{self._dhcp_version}"
+
+        for subnet in chain.from_iterable(
+            [config.get(subnetkey, [])]
+            + [
+                network.get(subnetkey, [])
+                for network in config.get("shared-networks", [])
+            ]
+        ):
+            yield from self._get_subnet_pools(subnet)
+
+
+    def _get_subnet_pools(self, subnet: dict):
+        for pool in subnet.get("pools", []):
+            if not (isinstance(pool, dict) and "pool" in pool and "id" in pool):
+                continue
+
+            pool_range = pool["pool"]
+            pool_id = pool["id"]
+            name = pool.get("user-context", {}).get(self._user_context_poolname_key, None)
+
+            try:
+                if "-" in pool_range:
+                    # x.x.x.x - x.x.x.x
+                    range_start, _, range_end = pool_range.partition("-")
+                    range_start = IP(range_start.strip())
+                    range_end = IP(range_end.strip())
+                else:
+                    # x.x.x.x/m
+                    ip = IP(pool_range.strip())
+                    range_start = ip[0]
+                    range_end = ip[-1]
+            except ValueError: #TODO: is it ValueError that is raised when IP is created?
+                continue
+
+            yield _Pool(
+                id=pool_id,
+                name=name,
+                range_start=range_start,
+                range_end=range_end,
+            )
+
+
+    def _fetch_pool_stats(self, pool: _Pool) -> Generator[_Metric]:
+        for stat_name, api_naming in self._api_namings:
+            value = self._fetch_pool_stat(pool, api_naming)
+            if value is None:
+                continue
+            path = metric_path_for_dhcp_pool(pool.range_start, pool.range_end, stat_name)
+            yield (path, (int(self._start_time), value))
+
+
+    def _fetch_pool_stat(
         self, address_pool: _Pool, api_stat_name: str
     ) -> Optional[int]:
         """
@@ -382,41 +409,6 @@ class Client:
             _logger.debug("Not using client certificate authentication")
 
         return session
-
-    def _fetch_subnets(self) -> list[_Subnet]:
-        """
-        Returns a list containing one _Subnet(subnet-id, subnet-prefix) instance
-        per subnet listed in the Kea DHCP configuration `config`.
-        """
-        subnets: list[_Subnet] = []
-        subnetkey = f"subnet{self._dhcp_version}"
-
-        config = self._fetch_config()
-
-        for subnet in chain.from_iterable(
-            [config.get(subnetkey, [])]
-            + [
-                network.get(subnetkey, [])
-                for network in config.get("shared-networks", [])
-            ]
-        ):
-            subnet_id = subnet.get("id", None)
-            netprefix = subnet.get("subnet", None)
-            if subnet_id is None or netprefix is None:
-                _logger.warning(
-                    "id and/or prefix missing from a subnet's configuration"
-                )
-                continue
-            subnets.append(
-                _Subnet(subnet_id, IP(netprefix), list(self._iter_pools(subnet)))
-            )
-
-        return subnets
-
-    def _iter_pools(self, subnet: dict):
-        subnet_pools = subnet.get("pools", [])
-        for pool in subnet_pools:
-            yield _Pool.from_kea(pool)
 
 
 class KeaException(GeneralException):
