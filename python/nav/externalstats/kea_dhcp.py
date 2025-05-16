@@ -93,6 +93,7 @@ class Client:
         http_basic_password: str = "",
         client_cert_path: str = "",
         client_cert_key_path: str = "",
+        user_context_poolname_key: str = "name",
         timeout: int = 10,
     ):
         self._url: str = url
@@ -101,6 +102,7 @@ class Client:
         self._http_basic_password: str = http_basic_password
         self._client_cert_path: str = client_cert_path
         self._client_key_path: str = client_cert_key_path
+        self._user_context_poolname_key: str = user_context_poolname_key
         self._timeout: int = timeout
 
         self._dhcp_config: Optional[dict] = None
@@ -146,7 +148,7 @@ class Client:
 
         # config = self._fetch_config()
         # subnets = self._subnets_of_config(config)
-        #subnets = self._fetch_subnets()
+        # subnets = self._fetch_subnets()
         pools = self.fetch_address_pools()
 
         stats = []
@@ -155,7 +157,9 @@ class Client:
                 value = self._fetch_stat_value(pool, api_naming)
                 if value is None:
                     continue
-                path = metric_path_for_dhcp_pool(pool.range_start, pool.range_end, stat_name)
+                path = metric_path_for_dhcp_pool(
+                    pool.range_start, pool.range_end, stat_name
+                )
                 stats.append((path, (int(start_time), value)))
 
         # maybe_updated_config = self._fetch_config()
@@ -182,12 +186,14 @@ class Client:
         )
         return stats
 
-    def _fetch_stat_value(self, address_pool: _Pool, api_stat_name: str) -> Optional[int]:
+    def _fetch_stat_value(
+        self, address_pool: _Pool, api_stat_name: str
+    ) -> Optional[int]:
         """
         Return the most recent stat value recorded by the Kea DHCP server for
         the given address pool and api stat name.
         """
-        full_name = f"subnet[{address_pool.id}].{api_stat_name}" #TODO: FIX
+        full_name = f"subnet[{address_pool.id}].{api_stat_name}"  # TODO: FIX
         try:
             response = self._send_query("statistic-get", name=full_name)
         except KeaEmpty:
@@ -199,9 +205,9 @@ class Client:
 
         if len(samples) == 0:
             _logger.info(
-                "No samples found when querying for '%s' in subnet '%s'", #TODO: FIX
+                "No samples found when querying for '%s' in subnet '%s'",  # TODO: FIX
                 api_stat_name,
-                address_pool.prefix, #TODO: FIX
+                address_pool.prefix,  # TODO: FIX
             )
             return None
 
