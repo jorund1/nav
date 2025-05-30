@@ -50,7 +50,7 @@ class _Pool:
                     "pools": [
                         {
                             "pool-id": 1,
-                            "pool": "192.0.2.1 - 192.0.2.200"
+                            "pool": "192.0.2.1 - 192.0.2.200",
                             "user-context": {
                                 "name": "foo"
                             }
@@ -104,7 +104,7 @@ class Client:
         self._client_cert_path: str = client_cert_path
         self._client_key_path: str = client_cert_key_path
         self._user_context_poolname_key: str = user_context_poolname_key
-        self._timeout: int = timeout
+        self._timeout: float = timeout
 
         self._dhcp_config: Optional[dict] = None
         self._session: Optional[Session] = None
@@ -146,6 +146,7 @@ class Client:
           client needs for fetching stats, causes KeaUnsupported to be raised.
         """
         self._session = self._create_session()
+        #TODO: remove local time stuff
         start_time = time.time()
         local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
         start_time = start_time + local_tz_offset
@@ -433,6 +434,11 @@ class Client:
 
         https = self._url.startswith("https://")
 
+        if not https:
+            _logger.warning(
+                "Using HTTP to request potentially sensitive data such as API passwords"
+            )
+
         if self._http_basic_user and self._http_basic_password:
             _logger.debug("Using HTTP Basic Authentication")
             if not https:
@@ -444,8 +450,6 @@ class Client:
         if self._client_cert_path:
             _logger.debug("Using client certificate authentication")
             _logger.debug("Certificate path: '%s'", self._client_cert_path)
-            if not https:
-                raise ValueError("HTTPS is required to use client certificates")
             if self._client_key_path:
                 _logger.debug("Certificate key path: '%s'", self._client_key_path)
                 session.cert = (self._client_cert_path, self._client_key_path)
