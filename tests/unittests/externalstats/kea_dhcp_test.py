@@ -1,16 +1,16 @@
+import logging
 from collections import deque
 from nav.externalstats.kea_dhcp import *
-from nav.externalstats.kea_dhcp import _KeaStatus, _Metric
+from nav.externalstats.kea_dhcp import _KeaStatus
 import pytest
 import requests
 from IPy import IP
 import json
 from requests.exceptions import JSONDecodeError
-from typing import Union, Callable
-from dataclasses import replace
+from typing import Callable
 from datetime import datetime, timedelta
 
-#TODO: Test _create_session
+#TODO: Test that caching works correct
 
 class TestRecognizableAPIResponses:
     """
@@ -19,40 +19,40 @@ class TestRecognizableAPIResponses:
     """
 
     def test_fetch_stats_should_return_correct_stats(
-        self, valid_dhcp4, responsequeue
+        self, valid_dhcp4, response_queue
     ):
         """
         This test checks that fetch_stats() returns the most recent stats
-        for each pool and stat type from the api response
+        for each pool and stat type from the api response.
         """
 
         config, statistics, expected_stats = valid_dhcp4
-        responsequeue.autofill("dhcp4", config=config, statistics=statistics)
+        response_queue.autofill("dhcp4", config=config, statistics=statistics)
         client = Client("foo", "http://example.org/")
 
         actual_stats = client.fetch_stats()
 
-        def clean(stats):
+        def normalize(stats):
             """
             Set stat timestamps to zero, because we do not care to compare the
             time a stat was fetched into NAV in this test.
             """
-            return [(path, (0, value)) for (path, (time, value)) in stats]
+            return sorted((path, (0, value)) for (path, (time, value)) in stats)
 
-        assert set(clean(actual_stats)) == set(clean(expected_stats))
+        assert normalize(actual_stats) == normalize(expected_stats)
+
 
     def test_fetch_stats_should_only_have_recent_timestamps(
-        self, valid_dhcp4, responsequeue
+        self, valid_dhcp4, response_queue
     ):
         """
-        This test checks that fetch_stats() only returns stats that have
-        recent timestamps - so that periodically fetching stats will form an
-        evenly spaced timeseries (Kea doesn't seem to change timestamps unless
-        stat data is changed, which results in very sporadic timeseries)
+        This test checks that fetch_stats() returns stats that have recent
+        enough timestamps - so that periodically fetching stats will form an
+        evenly spaced timeseries in graphite.
         """
 
         config, statistics, expected_stats = valid_dhcp4
-        responsequeue.autofill("dhcp4", config=config, statistics=statistics)
+        response_queue.autofill("dhcp4", config=config, statistics=statistics)
         client = Client("foo", "http://example.org/")
 
         actual_stats = client.fetch_stats()
@@ -62,12 +62,13 @@ class TestRecognizableAPIResponses:
                 time >= (datetime.now() - timedelta(minutes=5)).timestamp()
             )
 
-    def test_fetch_stats_should_handle_empty_config_in_api_configuration_response(
-        self, valid_dhcp4, responsequeue
+
+    def test_fetch_stats_should_handle_empty_config_in_config_api_response(
+        self, valid_dhcp4, response_queue
     ):
         """
         We assume in this case that the Kea DHCP server we query just doesn't have
-        any pools configured
+        any pools configured.
 
         The correct thing for fetch_stats() to do in this case is to just
         return an empty list of stats since there are no pools to fetch
@@ -77,13 +78,17 @@ class TestRecognizableAPIResponses:
         that the Kea server isn't configured with any subnets.
         """
         config, statistics, _ = valid_dhcp4
-        responsequeue.autofill("dhcp4", config=None, statistics=statistics)
-        responsequeue.add("config-get", lambda *a, **ka: make_api_response({"Dhcp4": {}}))
+        response_queue.autofill("dhcp4", config=None, statistics=statistics)
+        response_queue.add(
+            "config-get",
+            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}})
+        )
         client = Client("foo", "http://example.org/")
         assert list(client.fetch_stats()) == []
 
-    def test_fetch_stats_should_handle_empty_statistic_in_api_statistics_response(
-        self, valid_dhcp4, responsequeue
+
+    def test_fetch_stats_should_handle_empty_statistic_in_statistics_api_response(
+        self, valid_dhcp4, response_queue
     ):
         """
         If the Kea DHCP server returns no values for a specific statistic,
@@ -91,23 +96,25 @@ class TestRecognizableAPIResponses:
         case that all statistics are empty, return an empty list.
         """
         config, statistics, _ = valid_dhcp4
-        responsequeue.autofill("dhcp4", config=config, statistics=None)
-        responsequeue.add(
+        response_queue.autofill("dhcp4", config=config, statistics=None)
+        response_queue.add(
             "statistic-get",
-            lambda requestarguments, *a, **ka: make_api_response(
-                {requestarguments["name"]: []}
+            lambda kea_arguments, kea_service: make_api_response(
+                {kea_arguments["name"]: []}
             ),
         )
-        client = Client("http://example.org/")
+        client = Client("foo", "http://example.org/")
         assert list(client.fetch_stats()) == []
 
-    def test_fetch_stats_should_handle_unsupported_statistic_in_statistics_response(
-        self, valid_dhcp4, responsequeue
+
+    def test_fetch_stats_should_handle_unsupported_statistic_in_statistics_api_response(
+        self, valid_dhcp4, response_queue
     ):
         """
-        If the Kea DHCP server doesn't support a specific stat (e.g. because we query an
-        outdated version), just disregard that meric, and in the extreme case that no stat
-        is supported, return an empty list.
+        If the Kea DHCP server doesn't support a specific statistic type
+        (e.g. because we query an outdated Kea version), just disregard that
+        statistic type, and in the extreme case that no statistic type at all is
+        supported, return an empty list.
 
         TODO: Here, it may be wished for that NAV prints a log warning stating
         that the Kea server doesn't support some queried-for statistic.
@@ -120,65 +127,81 @@ class TestRecognizableAPIResponses:
         """
 
         config, statistics, _ = valid_dhcp4
-        responsequeue.autofill("dhcp4", config=config, statistics=None)
-        responsequeue.add("statistic-get", lambda *a, **ka: make_api_response({}))
-        client = Client("http://example.org/")
+        response_queue.autofill("dhcp4", config=config, statistics=None)
+        response_queue.add(
+            "statistic-get",
+            lambda kea_arguments, kea_service: make_api_response({})
+        )
+        client = Client("foo", "http://example.org/")
         assert list(client.fetch_stats()) == []
 
+
+    @pytest.mark.parametrize(
+        "http_status", range(400,500)
+    )
     def test_fetch_stats_should_raise_an_exception_on_http_error_response(
-        self, valid_dhcp4, responsequeue
+        self, valid_dhcp4, response_queue, http_status
     ):
         """
-        We shouldn't even attempt to find valid responses if the server won't
-        respond correctly
+        If the server responds with a HTTP error, the client should raise an
+        error.
         """
 
         config, statistics, _ = valid_dhcp4
-        responsequeue.autofill(
+        response_queue.autofill(
             "dhcp4",
             config=config,
             statistics=statistics,
-            attrs={"status_code": 403},
+            attrs={"status_code": http_status},
         )
 
-        client = Client("http://example.org/")
+        client = Client("foo", "http://example.org/")
 
         with pytest.raises(KeaException):
             client.fetch_stats()
+
+
+    @pytest.mark.parametrize(
+        "kea_status", [status for status in _KeaStatus if status != _KeaStatus.SUCCESS]
+    )
+    def test_fetch_stats_should_raise_an_exception_on_error_status_in_config_api_response(
+        self, valid_dhcp4, response_queue, kea_status
+    ):
+        """
+        If the server reports an API-specific error regarding serving its
+        configuration, the client should raise an error.
+        """
+        config, statistics, _ = valid_dhcp4
+        response_queue.autofill("dhcp4", config=None, statistics=statistics)
+        response_queue.add(
+            "config-get",
+            lambda kea_arguments, kea_service: make_api_response(config, status=kea_status)
+        )
+        client = Client("foo", "http://example.org/")
+        with pytest.raises(KeaException):
+            client.fetch_stats()
+
 
     @pytest.mark.parametrize(
         "status", [status for status in _KeaStatus if status != _KeaStatus.SUCCESS]
     )
-    def test_fetch_stats_should_raise_an_exception_on_error_status_in_config_response_from_api(
-        self, valid_dhcp4, responsequeue, status
+    def test_fetch_stats_should_raise_an_exception_on_error_status_in_statistic_api_response(
+        self, valid_dhcp4, response_queue, status
     ):
         """
-        We shouldn't even attempt to continue if the server reports
-        an error regarding serving its configuration
+        If the server reports an API-specific error regarding serving
+        statistics, the client should raise an error.
         """
         config, statistics, _ = valid_dhcp4
-        responsequeue.autofill("dhcp4", config=None, statistics=statistics)
-        responsequeue.add("config-get", make_api_response(config, status=status))
-        client = Client("http://example.org/")
+        response_queue.autofill("dhcp4", config=config, statistics=None)
+        response_queue.add(
+            "statistic-get",
+            lambda kea_arguments, kea_service: make_api_response(statistics, status=status),
+        )
+        client = Client("foo", "http://example.org/")
         with pytest.raises(KeaException):
             client.fetch_stats()
 
-    @pytest.mark.parametrize(
-        "status", [status for status in _KeaStatus if status != _KeaStatus.SUCCESS]
-    )
-    def test_fetch_stats_should_raise_an_exception_on_error_status_in_statistic_response_from_api(
-        self, valid_dhcp4, responsequeue, status
-    ):
-        """
-        We shouldn't even attempt to continue if the server reports
-        an error regarding serving statistics
-        """
-        config, statistics, _ = valid_dhcp4
-        responsequeue.autofill("dhcp4", config=config, statistics=None)
-        responsequeue.add("statistic-get", make_api_response(statistics, status=status))
-        client = Client("http://example.org/")
-        with pytest.raises(KeaException):
-            client.fetch_stats()
 
     @pytest.mark.parametrize(
         "status",
@@ -188,26 +211,29 @@ class TestRecognizableAPIResponses:
             if status not in (_KeaStatus.SUCCESS, _KeaStatus.UNSUPPORTED)
         ],
     )
-    def test_fetch_stats_should_raise_an_exception_on_error_status_in_config_hash_response_from_api(
-        self, valid_dhcp4, responsequeue, status
+    def test_fetch_stats_should_raise_an_exception_on_error_status_in_config_hash_api_response(
+        self, valid_dhcp4, response_queue, status
     ):
         """
         We shouldn't even attempt to continue if the server reports
         an error regarding serving configuration hash other than it
-        being unsupported
+        being unsupported.
         """
         foohash = "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"
         config, statistics, _ = valid_dhcp4
-        client = Client("http://example.org/")
+        client = Client("foo", "http://example.org/")
         config["Dhcp4"]["hash"] = foohash
-        responsequeue.autofill("dhcp4", config=config, statistics=statistics)
-        responsequeue.add(
+        response_queue.autofill("dhcp4", config=config, statistics=statistics)
+        response_queue.add(
             "config-hash-get", make_api_response({"hash": foohash}, status=status)
         )
         with pytest.raises(KeaException):
             client.fetch_stats()
 
 
+@pytest.mark.parametrize(
+    "invalid_response", ["{}", "foo", "\x00"]
+)
 class TestUnrecognizableAPIResponses:
     """
     If Kea responds in an unrecognizable way, we should always fail loudly,
@@ -216,40 +242,161 @@ class TestUnrecognizableAPIResponses:
     correctly.
     """
 
-    invalid_response = "{}"
-
-    def test_fetch_stats_should_raise_an_exception_on_unrecognizable_config_response_from_api(
-        self, valid_dhcp4, responsequeue
+    def test_fetch_stats_should_raise_an_exception_on_unrecognizable_config_api_response(
+        self, valid_dhcp4, response_queue, invalid_response
     ):
         config, statistics, _ = valid_dhcp4
-        client = Client("http://example.org/")
+        client = Client("foo", "http://example.org/")
 
-        responsequeue.autofill("dhcp4", config=None, statistics=statistics)
-        responsequeue.add("config-get", self.invalid_response)
+        response_queue.autofill("dhcp4", config=None, statistics=statistics)
+        response_queue.add("config-get", invalid_response)
         with pytest.raises(KeaException):
             client.fetch_stats()
 
-    def test_fetch_stats_should_raise_an_exception_on_unrecognizable_statistic_response_from_api(
-        self, valid_dhcp4, responsequeue
+    def test_fetch_stats_should_raise_an_exception_on_unrecognizable_statistic_api_response(
+        self, valid_dhcp4, response_queue, invalid_response
     ):
         config, statistics, _ = valid_dhcp4
-        client = Client("http://example.org/")
+        client = Client("foo", "http://example.org/")
 
-        responsequeue.autofill("dhcp4", config=config, statistics=None)
-        responsequeue.add("statistic-get", self.invalid_response)
+        response_queue.autofill("dhcp4", config=config, statistics=None)
+        response_queue.add("statistic-get", invalid_response)
         with pytest.raises(KeaException):
             client.fetch_stats()
 
-    def test_fetch_stats_should_raise_an_exception_on_unrecognizable_config_hash_response_from_api(
-        self, valid_dhcp4, responsequeue
+    def test_fetch_stats_should_raise_an_exception_on_unrecognizable_config_hash_api_response(
+        self, valid_dhcp4, response_queue, invalid_response
     ):
         config, statistics, _ = valid_dhcp4
-        client = Client("http://example.org/")
+        client = Client("foo", "http://example.org/")
         config["Dhcp4"]["hash"] = "foo"
-        responsequeue.autofill("dhcp4", config=config, statistics=statistics)
-        responsequeue.add("config-hash-get", self.invalid_response)
+        response_queue.autofill("dhcp4", config=config, statistics=statistics)
+        response_queue.add("config-hash-get", invalid_response)
         with pytest.raises(KeaException):
             client.fetch_stats()
+
+
+
+def test_fetch_stats_should_check_and_warn_if_server_config_changed_during_call(
+        valid_dhcp4, response_queue, caplog
+):
+    config, statistics, _ = valid_dhcp4
+    client = Client("foo", "http://example.org/")
+    response_queue.autofill("dhcp4", config=config, statistics=statistics)
+
+
+def test_fetch_stats_should_warn_if_using_http(
+    valid_dhcp4, response_queue, caplog
+):
+    """
+    A warning should be logged when the scheme is HTTP since config responses
+    from the Kea API may contain sensitive data such as passwords in plaintext.
+    """
+    config, statistics, _ = valid_dhcp4
+    client = Client("foo", "http://example.org/")
+    response_queue.autofill("dhcp4", config=config, statistics=statistics)
+
+    with caplog.at_level(logging.WARNING):
+        client.fetch_stats()
+
+    assert "Using HTTP to request potentially sensitive data such as API passwords" in caplog.text.lower()
+
+
+def test_fetch_stats_should_warn_if_using_http_basic_auth_with_http(
+    valid_dhcp4, response_queue, caplog
+):
+    """
+    An extra warning when the scheme is HTTP should be logged when HTTP Basic
+    Authentication is being used since this entails passwords being sent in
+    plaintext from client to server.
+    """
+    config, statistics, _ = valid_dhcp4
+    client = Client("foo", "http://example.org/", http_basic_username="nav", http_basic_password="nav")
+    response_queue.autofill("dhcp4", config=config, statistics=statistics)
+
+    with caplog.at_level(logging.WARNING):
+        client.fetch_stats()
+
+    assert "Using HTTP Basic Authentication without HTTPS" in caplog.text.lower()
+
+
+def test_fetch_stats_should_error_if_using_client_certificate_with_http(
+    valid_dhcp4, response_queue, caplog
+):
+    """
+    Client authentication is part of the TLS spec so it doesn't make sense to
+    continue if it is configured and the specified scheme is HTTP as we would
+    have to either ignore the wish to use HTTP or the wish to use TLS
+    certificates or both.
+    """
+    config, statistics, _ = valid_dhcp4
+    client = Client("foo", "http://example.org/", client_cert_path="/bar/baz.pem")
+    response_queue.autofill("dhcp4", config=config, statistics=statistics)
+
+    with pytest.raises(Exception):
+        client.fetch_stats()
+
+
+def test_fetch_stats_should_use_http_basic_auth_when_this_is_configured(
+        valid_dhcp4, response_queue, monkeypatch
+):
+    """
+    Checks that the requests.Session object used during a call to
+    Client.fetch_stats() has HTTP Basic Authentication parameters configured
+    throughout the call if HTTP Basic Authentication was configured during
+    client init.
+    """
+    config, statistics, _ = valid_dhcp4
+    client = Client(
+        "foo",
+        "http://example.org/",
+        http_basic_username="bar",
+        http_basic_password="baz",
+    )
+    response_queue.autofill("dhcp4", config=config, statistics=statistics)
+
+    post = Session.post
+    check_was_called = False
+    def check_auth(self, *args, **kwargs):
+        global check_was_called
+        check_was_called = True
+        assert self.auth == ("bar", "baz")
+        return post(self, *args, **kwargs)
+
+    monkeypatch.setattr(requests.Session, 'post', check_auth)
+    client.fetch_stats()
+
+    assert check_was_called
+
+
+def test_fetch_stats_should_use_client_certificates_when_this_is_configured(
+        valid_dhcp4, response_queue, monkeypatch
+):
+    """
+    Checks that the requests.Session object used during a call to
+    Client.fetch_stats() has certificate parameters configured throughout the
+    call if client TLS certificates was configured during client init.
+    """
+    config, statistics, _ = valid_dhcp4
+    client = Client(
+        "foo",
+        "http://example.org/",
+        client_cert_path="/bar/baz.pem",
+    )
+    response_queue.autofill("dhcp4", config=config, statistics=statistics)
+
+    post = Session.post
+    check_was_called = False
+    def check_cert(self, *args, **kwargs):
+        global check_was_called
+        check_was_called = True
+        assert self.cert == "/bar/baz.pem"
+        return post(self, *args, **kwargs)
+
+    monkeypatch.setattr(requests.Session, 'post', check_cert)
+    client.fetch_stats()
+
+    assert check_was_called
 
 
 @pytest.fixture
@@ -258,12 +405,12 @@ def valid_dhcp4():
         "Dhcp4": {
             "control-socket": {
                 "socket-name": "/run/kea/control_socket_4",
-                "socket-type": "unix"
+                "socket-type": "unix",
             },
             "hooks-libraries": [],
             "lease-database": {
                 "name": "/var/lib/kea/kea-leases4.csv",
-                "type": "memfile"
+                "type": "memfile",
             },
             "shared-networks": [
                 {
@@ -274,14 +421,14 @@ def valid_dhcp4():
                             "pools": [
                                 {
                                     "option-data": [],
-                                    "pool": "192.0.3.1-192.0.3.10",
+                                    "pool": "42.0.3.1-42.0.3.10",
                                     "pool-id": 1,
                                     "user-context": {
-                                        "name": "oslo-student"
-                                    }
-                                }
+                                        "name": "oslo-student",
+                                    },
+                                },
                             ],
-                            "subnet": "192.0.3.0/24",
+                            "subnet": "42.0.3.0/24",
                         },
                         {
                             "id": 4,
@@ -289,17 +436,17 @@ def valid_dhcp4():
                             "pools": [
                                 {
                                     "option-data": [],
-                                    "pool": "192.0.4.1-192.0.4.5",
+                                    "pool": "42.0.4.1-42.0.4.5",
                                     "pool-id": 1,
                                     "user-context": {
-                                        "name": "oslo-staff"
-                                    }
-                                }
+                                        "name": "oslo-staff",
+                                    },
+                                },
                             ],
-                            "subnet": "192.0.4.1/24",
-                        }
+                            "subnet": "42.0.4.1/24",
+                        },
                     ],
-                    "valid-lifetime": 4000
+                    "valid-lifetime": 4000,
                 },
                 {
                     "name": "shared-network-2",
@@ -310,18 +457,18 @@ def valid_dhcp4():
                             "pools": [
                                 {
                                     "option-data": [],
-                                    "pool": "192.0.5.1-192.0.5.5",
+                                    "pool": "42.0.5.1-42.0.5.5",
                                     "pool-id": 1,
                                     "user-context": {
-                                        "name": "stavanger-staff"
-                                    }
-                                }
+                                        "name": "stavanger-staff",
+                                    },
+                                },
                             ],
-                            "subnet": "192.0.5.0/24",
-                        }
+                            "subnet": "42.0.5.0/24",
+                        },
                     ],
-                    "valid-lifetime": 4000
-                }
+                    "valid-lifetime": 4000,
+                },
             ],
             "subnet4": [
                 {
@@ -330,14 +477,14 @@ def valid_dhcp4():
                     "pools": [
                         {
                             "option-data": [],
-                            "pool": "192.0.1.1-192.0.1.10",
+                            "pool": "42.0.1.1-42.0.1.10",
                             "pool-id": 1,
                             "user-context": {
-                                "name": "bergen-staff"
-                            }
-                        }
+                                "name": "bergen-staff",
+                            },
+                        },
                     ],
-                    "subnet": "192.0.1.0/24",
+                    "subnet": "42.0.1.0/24",
                 },
                 {
                     "id": 2,
@@ -345,55 +492,54 @@ def valid_dhcp4():
                     "pools": [
                         {
                             "option-data": [],
-                            "pool": "192.0.2.1-192.0.2.10",
-                            "pool-id": 1
+                            "pool": "42.0.2.1-42.0.2.10",
+                            "pool-id": 1,
                             "user-context": {
-                                "name": "bergen-student"
-                            }
+                                "name": "bergen-student",
+                            },
                         },
                         {
                             "option-data": [],
-                            "pool": "192.0.2.32/28",
+                            "pool": "42.0.2.32/28",
                             "pool-id": 3,
                             "user-context": {
-                                "name": "bergen-student"
-                            }
+                                "name": "bergen-student",
+                            },
                         },
                         {
                             "option-data": [],
-                            "pool": "192.0.2.128/25",
+                            "pool": "42.0.2.128/25",
                             "pool-id": 2,
                             "user-context": {
-                                "name": "bergen-student"
-                            }
-                        }
+                                "name": "bergen-student",
+                            },
+                        },
                     ],
-                    "subnet": "192.0.2.0/24",
-                }
+                    "subnet": "42.0.2.0/24",
+                },
             ],
-            "valid-lifetime": 4000
+            "valid-lifetime": 4000,
         },
-        "hash": "40E1767436D123D5184DFBCE9B3C8E7F24C5F7DC7C11488C0029EF399502E373"
     }
 
     statistics = {
         "subnet[1].pool[1].assigned-addresses": [
             [2, "2025-05-30 05:49:49.467993"],
             [0, "2025-05-29 05:49:49.467993"],
-            [0, "2025-05-28 05:49:49.467993"]
+            [0, "2025-05-28 05:49:49.467993"],
         ],
         "subnet[1].pool[1].declined-addresses": [
             [1, "2025-05-30 05:49:49.467995"],
             [0, "2025-05-29 05:49:49.467995"],
-            [0, "2025-05-28 05:49:49.467995"]
+            [0, "2025-05-28 05:49:49.467995"],
         ],
         "subnet[1].pool[1].total-addresses": [
             [10, "2025-05-30 05:49:49.467930"],
-            [8, "2025-05-29 05:49:49.467930"]
+            [8, "2025-05-29 05:49:49.467930"],
         ],
         "subnet[2].pool[1].assigned-addresses": [
             [0, "2025-05-30 05:49:49.468017"],
-            [1, "2025-05-29 05:49:49.468017"]
+            [1, "2025-05-29 05:49:49.468017"],
         ],
         "subnet[2].pool[1].declined-addresses": [[1, "2025-05-30 05:49:49.468019"]],
         "subnet[2].pool[1].total-addresses": [[10, "2025-05-30 05:49:49.467941"]],
@@ -402,16 +548,16 @@ def valid_dhcp4():
         "subnet[2].pool[2].total-addresses": [[128, "2025-05-30 05:49:49.467949"]],
         "subnet[2].pool[3].assigned-addresses": [
             [0, "2025-05-30 05:49:49.468025"],
-            [2, "2025-05-29 05:49:49.468025"]
+            [2, "2025-05-29 05:49:49.468025"],
         ],
         "subnet[2].pool[3].declined-addresses": [
             [0, "2025-05-30 05:49:49.468027"],
-            [3, "2025-05-29 05:49:49.468027"]
+            [3, "2025-05-29 05:49:49.468027"],
         ],
         "subnet[2].pool[3].total-addresses": [
             [16, "2025-05-30 05:49:49.467945"],
             [16, "2025-05-29 05:49:49.467945"],
-            [16, "2025-05-28 05:49:49.467945"]
+            [16, "2025-05-28 05:49:49.467945"],
         ],
         "subnet[3].pool[1].assigned-addresses": [[0, "2025-05-30 05:49:49.468051"]],
         "subnet[3].pool[1].declined-addresses": [[0, "2025-05-30 05:49:49.468053"]],
@@ -421,7 +567,7 @@ def valid_dhcp4():
         "subnet[4].pool[1].total-addresses": [[5, "2025-05-30 05:49:49.467968"]],
         "subnet[5].pool[1].assigned-addresses": [[0, "2025-05-30 05:49:49.468085"]],
         "subnet[5].pool[1].declined-addresses": [[0, "2025-05-30 05:49:49.468087"]],
-        "subnet[5].pool[1].total-addresses": [[5, "2025-05-30 05:49:49.467976"]]
+        "subnet[5].pool[1].total-addresses": [[5, "2025-05-30 05:49:49.467976"]],
     }
 
 
@@ -431,32 +577,36 @@ def valid_dhcp4():
     # stat in each list is assumed to be the most recent, and this is the
     # stat we expect to get for each stat type and subnet after processing
     # the api response.
+
     expected_stats = [
-        ("nav.dhcp.pools.oslo-student.192_0_3_1.192_0_3_10.assigned", ()),
-        ("nav.dhcp.pools.oslo-student.192_0_3_1.192_0_3_10.declined", ()),
-        ("nav.dhcp.pools.oslo-student.192_0_3_1.192_0_3_10.total", ()),
+        ("nav.dhcp.pools.bergen-staff.42_0_1_1.42_0_1_10.assigned", ("2025-05-30 05:49:49.467993", 2)),
+        ("nav.dhcp.pools.bergen-staff.42_0_1_1.42_0_1_10.declined", ("2025-05-30 05:49:49.467993", 1)),
+        ("nav.dhcp.pools.bergen-staff.42_0_1_1.42_0_1_10.total", ("2025-05-30 05:49:49.467993", 10)),
 
-        ("nav.dhcp.pools.oslo-staff.192_0_4_1.192_0_4_5.assigned", ()),
-        ("nav.dhcp.pools.oslo-staff.192_0_4_1.192_0_4_5.declined", ()),
-        ("nav.dhcp.pools.oslo-staff.192_0_4_1.192_0_4_5.total", ()),
+        ("nav.dhcp.pools.bergen-student.42_0_2_1.42_0_2_10.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pools.bergen-student.42_0_2_1.42_0_2_10.declined", ("2025-05-30 05:49:49.467993", 1)),
+        ("nav.dhcp.pools.bergen-student.42_0_2_1.42_0_2_10.total", ("2025-05-30 05:49:49.467993", 10)),
 
-        ("nav.dhcp.pools.stavanger-staff.192_0_5_1.192_0_5_5.assigned", ()),
-        ("nav.dhcp.pools.stavanger-staff.192_0_5_1.192_0_5_5.declined", ()),
-        ("nav.dhcp.pools.stavanger-staff.192_0_5_1.192_0_5_5.total", ()),
+        ("nav.dhcp.pools.bergen-student.42_0_2_128.42_0_2_255.assigned", ("2025-05-30 05:49:49.467993", 1)),
+        ("nav.dhcp.pools.bergen-student.42_0_2_128.42_0_2_255.declined", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pools.bergen-student.42_0_2_128.42_0_2_255.total", ("2025-05-30 05:49:49.467993", 128)),
 
-        ("nav.dhcp.pools.bergen-staff.192_0_1_1.192_0_1_10.assigned", ()),
-        ("nav.dhcp.pools.bergen-staff.192_0_1_1.192_0_1_10.declined", ()),
-        ("nav.dhcp.pools.bergen-staff.192_0_1_1.192_0_1_10.total", ()),
+        ("nav.dhcp.pools.bergen-student.42_0_2_32.42_0_2_47.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pools.bergen-student.42_0_2_32.42_0_2_47.declined", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pools.bergen-student.42_0_2_32.42_0_2_47.total", ("2025-05-30 05:49:49.467993", 16)),
 
-        ("nav.dhcp.pools.bergen-student.192_0_2_32.192_0_2_47.assigned", ()),
-        ("nav.dhcp.pools.bergen-student.192_0_2_32.192_0_2_47.declined", ()),
-        ("nav.dhcp.pools.bergen-student.192_0_2_32.192_0_2_47.total", ()),
+        ("nav.dhcp.pools.oslo-student.42_0_3_1.42_0_3_10.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pools.oslo-student.42_0_3_1.42_0_3_10.declined", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pools.oslo-student.42_0_3_1.42_0_3_10.total", ("2025-05-30 05:49:49.467993", 10)),
 
-        ("nav.dhcp.pools.bergen-student.192_0_2_128.192_0_2_255.assigned", ()),
-        ("nav.dhcp.pools.bergen-student.192_0_2_128.192_0_2_255.declined", ()),
-        ("nav.dhcp.pools.bergen-student.192_0_2_128.192_0_2_255.total", ()),
+        ("nav.dhcp.pools.oslo-staff.42_0_4_1.42_0_4_5.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pools.oslo-staff.42_0_4_1.42_0_4_5.declined", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pools.oslo-staff.42_0_4_1.42_0_4_5.total", ("2025-05-30 05:49:49.467993", 5)),
+
+        ("nav.dhcp.pools.stavanger-staff.42_0_5_1.42_0_5_5.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pools.stavanger-staff.42_0_5_1.42_0_5_5.declined", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pools.stavanger-staff.42_0_5_1.42_0_5_5.total", ("2025-05-30 05:49:49.467993", 5)),
     ]
-
 
     return config, statistics, expected_stats
 
@@ -464,7 +614,7 @@ def valid_dhcp4():
 def make_api_response(val: dict, status:_KeaStatus=_KeaStatus.SUCCESS):
     """
     Make a Kea API conformant response body whose response value (called
-    response 'arguments' in the specification) is given by the dictionary `val`
+    response 'arguments' in the specification) is given by the dictionary `val`.
     """
     return f'''
 [
@@ -477,13 +627,13 @@ def make_api_response(val: dict, status:_KeaStatus=_KeaStatus.SUCCESS):
 
 
 @pytest.fixture
-def responsequeue(monkeypatch):
+def response_queue(monkeypatch):
     """
     Any test that include this fixture, will automatically mock
     requests.Session.post() and requests.post(). The fixture returns a
     namespace with three functions:
 
-    responsequeue.add(command, text_or_func, attrs=None) --- appends the given
+    response_queue.add(command, text_or_func, attrs=None) --- appends the given
     text_or_func, which is either a string or a function f(dict, list) ->
     string, to the given command string's associated fifo queue to use in
     generating responses for Kea API requests for command. On any calls to
@@ -498,10 +648,10 @@ def responsequeue(monkeypatch):
     requests.Response response. Setting attrs={"status": 404} will cause the
     response to be a HTTP 404 error.
 
-    responsequeue.clear() --- Empty the fifo queues of all commands. This
+    response_queue.clear() --- Empty the fifo queues of all commands. This
     removes all previously configured command responses.
 
-    responsequeue.autofill(service, config, statistics) --- fill the queue for
+    response_queue.autofill(service, config, statistics) --- fill the queue for
     the "config-get" and "statistic-get" commands to mimic the response texts
     actually sent by a Kea Control Agent for a Kea DHCP server named `service`
     ("dhcp4" for ipv4 DHCP "dhcp6" for ipv6 DHCP) with config `config` and
