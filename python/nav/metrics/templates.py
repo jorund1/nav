@@ -187,10 +187,13 @@ def metric_path_for_multicast_usage(group, sysname):
     )
 
 
-def metric_path_for_dhcp_pool(subnet_prefix, metric_name):
-    tmpl = "nav.dhcp.subnet.{subnet_prefix}.{metric_name}"
-    ip = IPy.IP(subnet_prefix)
+def metric_path_for_dhcp_pool(pool_name, range_start, range_end, metric_name):
+    tmpl = "nav.dhcp.pool.{pool_name}.{range_start}.{range_end}.{metric_name}"
+    range_start = IPy.IP(range_start).strNormal()
+    range_end = IPy.IP(range_end).strNormal()
     return tmpl.format(
-        subnet_prefix=escape_metric_name(ip.strNormal()),
-        metric_name=metric_name,
+        pool_name=escape_metric_name(pool_name),
+        range_start=escape_metric_name(range_start),
+        range_end=escape_metric_name(range_end),
+        metric_name=escape_metric_name(metric_name),
     )

@@ -39,9 +39,31 @@ _logger = logging.getLogger(__name__)
 class _Pool:
     """
     A Kea DHCP configured pool
+
+    An example Kea DHCP configuration looks like the following:
+    {
+        "Dhcp4": {
+            "subnet4": [
+                {
+                    "pool-id": 1,
+                    "subnet": "192.0.2.0/24",
+                    "pools": [
+                        {
+                            "pool-id": 1,
+                            "pool": "192.0.2.1 - 192.0.2.200"
+                            "user-context": {
+                                "name": "foo"
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    }
     """
 
-    id: int
+    subnet_id: int
+    pool_id: int
     name: str
     range_start: IP
     range_end: IP
@@ -64,6 +86,7 @@ class Client:
 
     def __init__(
         self,
+        name: str,
         url: str,
         dhcp_version: int = 4,
         http_basic_username: str = "",
@@ -73,6 +96,7 @@ class Client:
         user_context_poolname_key: str = "name",
         timeout: int = 10,
     ):
+        self._name: str = name
         self._url: str = url
         self._dhcp_version: int = dhcp_version
         self._http_basic_user: str = http_basic_username
@@ -84,7 +108,7 @@ class Client:
 
         self._dhcp_config: Optional[dict] = None
         self._session: Optional[Session] = None
-        self._start_time: float = -1
+        self._start_time: int = int(time.time())
 
         if dhcp_version == 4:
             self._api_namings = (
@@ -102,10 +126,12 @@ class Client:
 
         * The total amount of addresses in that pool.
 
-        * The amount of currently assigned (i.e. leased) addresses in that pool.
+        * The amount of currently assigned (aka. leased) addresses in that pool.
 
-        * The amount of declined (i.e. expired but not yet reclaimed by the DHCP
-          server) addresses in that pool.
+        * The amount of declined addresses in that pool. That is, addresses in
+          that pool that is erroneously used by unkown entities and therefore
+          not available for assignment. The set of declined addresses is a
+          subset of the set of assigned addresses.
 
         If the Kea API responds with an empty response to one or more of the
         requests for some stat(s), these stats will be missing in the returned
@@ -123,19 +149,16 @@ class Client:
         start_time = time.time()
         local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
         start_time = start_time + local_tz_offset
-        self._start_time = start_time # TODO: Change to int
+        self._start_time = int(start_time)
 
-        # config = self._fetch_config()
-        # subnets = self._subnets_of_config(config)
-        # subnets = self._fetch_subnets()
-        pools = self._fetch_pools()
+        pools = sorted(self._fetch_pools())
 
         stats = []
         for pool in pools:
             stats.extend(self._fetch_pool_stats(pool))
 
-        maybe_updated_pools = self._fetch_pools()
-        if sorted(pools) != sorted(maybe_updated_pools):
+        maybe_updated_pools = sorted(self._fetch_pools())
+        if pools != maybe_updated_pools:
             _logger.warning(
                 "The DHCP server's address pool configuration was modified while stats "
                 "were being fetched. This may cause stats collected during this run to "
@@ -145,8 +168,10 @@ class Client:
         self._session.close()
         self._session = None
         end_time = time.time()
+        local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
+        end_time = end_time + local_tz_offset
         _logger.info(
-            "Fetched %d stats(s) for %d pool(s) in %.2f seconds from %s",
+            "Fetched %d stats(s) from %d pool(s) in %.2f seconds from %s",
             len(stats),
             len(pools),
             end_time - start_time,
@@ -156,9 +181,8 @@ class Client:
 
     def _fetch_pools(self) -> Generator[_Pool]:
         """
-        TODO: Change doc
-        Returns a list containing one _Subnet(subnet-id, subnet-prefix) instance
-        per subnet listed in the Kea DHCP configuration `config`.
+        Returns one _Pool instance per pool listed in the Kea DHCP server's
+        configuration.
         """
         config = self._fetch_config()
         subnetkey = f"subnet{self._dhcp_version}"
@@ -173,14 +197,36 @@ class Client:
             yield from self._get_subnet_pools(subnet)
 
 
-    def _get_subnet_pools(self, subnet: dict):
-        for pool in subnet.get("pools", []):
-            if not (isinstance(pool, dict) and "pool" in pool and "id" in pool):
-                continue
+    def _get_subnet_pools(self, subnet: dict) -> Generator[_Pool]:
+        """
+        Returns one _Pool instance per pool configured for a subnet in a Kea
+        DHCP server's configuration.
+        """
+        match subnet:
+            case {"id": int(subnet_id)}:
+                pass
+            case _:
+                _logger.debug(
+                    "Misconfigured subnet from %s, skipping...",
+                    self._url,
+                )
+                return
 
-            pool_range = pool["pool"]
-            pool_id = pool["id"]
+        for pool in subnet.get("pools", []):
+            match pool:
+                case {"pool-id": int(pool_id), "pool": str(pool_range)}:
+                    pass
+                case _:
+                    _logger.debug(
+                        'Misconfigured pool for subnet with id %d from %s, skipping... '
+                        '(make sure every pool has "pool-id" and "pool" configured)',
+                        subnet_id,
+                        self._url,
+                    )
+                    continue
+
             name = pool.get("user-context", {}).get(self._user_context_poolname_key, None)
+            name = name if isinstance(name, str) else ""
 
             try:
                 if "-" in pool_range:
@@ -191,13 +237,20 @@ class Client:
                 else:
                     # x.x.x.x/m
                     ip = IP(pool_range.strip())
-                    range_start = ip[0]
-                    range_end = ip[-1]
-            except ValueError: #TODO: is it ValueError that is raised when IP is created?
+                    range_start = IP(ip[0])
+                    range_end = IP(ip[-1])
+            except ValueError:
+                _logger.debug(
+                    "Pool range in pool with id %d from %s configured with unknown format '%s', skipping...",
+                    pool_id,
+                    self._url,
+                    pool_range,
+                )
                 continue
 
             yield _Pool(
-                id=pool_id,
+                subnet_id=subnet_id,
+                pool_id=pool_id,
                 name=name,
                 range_start=range_start,
                 range_end=range_end,
@@ -209,32 +262,35 @@ class Client:
             value = self._fetch_pool_stat(pool, api_naming)
             if value is None:
                 continue
-            path = metric_path_for_dhcp_pool(pool.range_start, pool.range_end, stat_name)
-            yield (path, (int(self._start_time), value))
+            path = metric_path_for_dhcp_pool(pool.name, pool.range_start, pool.range_end, stat_name)
+            yield (path, (self._start_time, value))
 
 
     def _fetch_pool_stat(
-        self, address_pool: _Pool, api_stat_name: str
+        self, pool: _Pool, api_stat_name: str
     ) -> Optional[int]:
         """
         Return the most recent stat value recorded by the Kea DHCP server for
         the given address pool and api stat name.
         """
-        full_name = f"subnet[{address_pool.id}].{api_stat_name}"  # TODO: FIX
+        statistic = f"subnet[{pool.subnet_id}].pool[{pool.pool_id}].{api_stat_name}"
         try:
-            response = self._send_query("statistic-get", name=full_name)
+            response = self._send_query("statistic-get", name=statistic)
         except KeaEmpty:
             # This may occur if the subnet we query have been removed from the
             # DHCP server's configuration at time of request
             response = {}
 
-        samples = response.get("arguments", {}).get(full_name, [])
+        samples = response.get("arguments", {}).get(statistic, [])
 
         if len(samples) == 0:
             _logger.info(
-                "No samples found when querying for '%s' in subnet '%s'",  # TODO: FIX
+                "No samples found when querying for '%s' in pool with range '%s-%s' "
+                "and name '%s'",
                 api_stat_name,
-                address_pool.prefix,  # TODO: FIX
+                pool.range_start,
+                pool.range_end,
+                pool.name,
             )
             return None
 
@@ -299,7 +355,7 @@ class Client:
         post_data = json.dumps(
             {
                 "command": command,
-                "arguments": {**kwargs},
+                "arguments": kwargs,
                 "service": [f"dhcp{self._dhcp_version}"],
             }
         )
@@ -332,36 +388,26 @@ class Client:
 
         # Any valid response from Kea is a JSON list with one entry corresponding to the
         # response from either the dhcp4 or dhcp6 service we queried
-        if not (
-            isinstance(responses, list)
-            and len(responses) == 1
-            and isinstance(responses[0], dict)
-            and "result" in responses[0]
-        ):
-            if (
-                isinstance(responses, dict)
-                and "result" in responses
-                and "text" in responses
-            ):
+        match responses:
+            case [{"result": int(status)} as response]:
+                pass
+            case {"result": int(status), "text": str(message)}:
                 # If the response is a JSON object it's a specific error message
                 # See https://kea.readthedocs.io/en/kea-2.6.0/arm/ctrl-channel.html#control-agent-command-response-format
-                raise KeaException(f"{responses['result']}: {responses['text']}")
-            raise KeaException(
-                "%s does not look like a Kea API; "
-                "response JSON structured in an unknown way",
-                self._url,
-            )
-
-        response = responses[0]
-        status = response["result"]
-        description = response.get("text", "(no description)")
+                raise KeaException(f"{status}: {message}")
+            case _:
+                raise KeaException(
+                    "%s does not look like a Kea API; "
+                    "response JSON structured in an unknown way",
+                    self._url,
+                )
 
         _logger.debug(
             "Response from %s to command '%s' was '%s: %s'",
             self._url,
             command,
             status,
-            description,
+            response.get("text", "(no description)")
         )
 
         if status == _KeaStatus.SUCCESS:
@@ -378,8 +424,8 @@ class Client:
 
     def _create_session(self) -> Session:
         """
-        Creates and returns a HTTP session for use with recurring HTTP requests
-        in the requests package
+        Creates and returns an HTTP session with authentication based on
+        credentials passed during object initialization.
         """
         _logger.debug("Creating new HTTP session for use with Kea API at %s", self._url)
 

@@ -23,12 +23,12 @@ class TestRecognizableAPIResponses:
     ):
         """
         This test checks that fetch_stats() returns the most recent stats
-        for each subnet and type from the api response
+        for each pool and stat type from the api response
         """
 
         config, statistics, expected_stats = valid_dhcp4
         responsequeue.autofill("dhcp4", config=config, statistics=statistics)
-        client = Client("http://example.org/")
+        client = Client("foo", "http://example.org/")
 
         actual_stats = client.fetch_stats()
 
@@ -37,7 +37,7 @@ class TestRecognizableAPIResponses:
             Set stat timestamps to zero, because we do not care to compare the
             time a stat was fetched into NAV in this test.
             """
-            return [replace(stat, timestamp=0) for stat in stats]
+            return [(path, (0, value)) for (path, (time, value)) in stats]
 
         assert set(clean(actual_stats)) == set(clean(expected_stats))
 
@@ -53,13 +53,13 @@ class TestRecognizableAPIResponses:
 
         config, statistics, expected_stats = valid_dhcp4
         responsequeue.autofill("dhcp4", config=config, statistics=statistics)
-        client = Client("http://example.org/")
+        client = Client("foo", "http://example.org/")
 
         actual_stats = client.fetch_stats()
         assert len(actual_stats) > 0
-        for stat in actual_stats:
+        for (path, (time, value)) in actual_stats:
             assert (
-                stat.timestamp >= (datetime.now() - timedelta(minutes=5)).timestamp()
+                time >= (datetime.now() - timedelta(minutes=5)).timestamp()
             )
 
     def test_fetch_stats_should_handle_empty_config_in_api_configuration_response(
@@ -67,10 +67,10 @@ class TestRecognizableAPIResponses:
     ):
         """
         We assume in this case that the Kea DHCP server we query just doesn't have
-        any subnets configured
+        any pools configured
 
         The correct thing for fetch_stats() to do in this case is to just
-        return an empty list of stats since there are no subnets to fetch
+        return an empty list of stats since there are no pools to fetch
         from.
 
         TODO: Here, it may be wished for that NAV prints a log info stating
@@ -78,8 +78,8 @@ class TestRecognizableAPIResponses:
         """
         config, statistics, _ = valid_dhcp4
         responsequeue.autofill("dhcp4", config=None, statistics=statistics)
-        responsequeue.add("config-get", lambda *a, **ka: kearesponse({"Dhcp4": {}}))
-        client = Client("http://example.org/")
+        responsequeue.add("config-get", lambda *a, **ka: make_api_response({"Dhcp4": {}}))
+        client = Client("foo", "http://example.org/")
         assert list(client.fetch_stats()) == []
 
     def test_fetch_stats_should_handle_empty_statistic_in_api_statistics_response(
@@ -94,7 +94,7 @@ class TestRecognizableAPIResponses:
         responsequeue.autofill("dhcp4", config=config, statistics=None)
         responsequeue.add(
             "statistic-get",
-            lambda requestarguments, *a, **ka: kearesponse(
+            lambda requestarguments, *a, **ka: make_api_response(
                 {requestarguments["name"]: []}
             ),
         )
@@ -121,7 +121,7 @@ class TestRecognizableAPIResponses:
 
         config, statistics, _ = valid_dhcp4
         responsequeue.autofill("dhcp4", config=config, statistics=None)
-        responsequeue.add("statistic-get", lambda *a, **ka: kearesponse({}))
+        responsequeue.add("statistic-get", lambda *a, **ka: make_api_response({}))
         client = Client("http://example.org/")
         assert list(client.fetch_stats()) == []
 
@@ -158,7 +158,7 @@ class TestRecognizableAPIResponses:
         """
         config, statistics, _ = valid_dhcp4
         responsequeue.autofill("dhcp4", config=None, statistics=statistics)
-        responsequeue.add("config-get", kearesponse(config, status=status))
+        responsequeue.add("config-get", make_api_response(config, status=status))
         client = Client("http://example.org/")
         with pytest.raises(KeaException):
             client.fetch_stats()
@@ -175,7 +175,7 @@ class TestRecognizableAPIResponses:
         """
         config, statistics, _ = valid_dhcp4
         responsequeue.autofill("dhcp4", config=config, statistics=None)
-        responsequeue.add("statistic-get", kearesponse(statistics, status=status))
+        responsequeue.add("statistic-get", make_api_response(statistics, status=status))
         client = Client("http://example.org/")
         with pytest.raises(KeaException):
             client.fetch_stats()
@@ -202,7 +202,7 @@ class TestRecognizableAPIResponses:
         config["Dhcp4"]["hash"] = foohash
         responsequeue.autofill("dhcp4", config=config, statistics=statistics)
         responsequeue.add(
-            "config-hash-get", kearesponse({"hash": foohash}, status=status)
+            "config-hash-get", make_api_response({"hash": foohash}, status=status)
         )
         with pytest.raises(KeaException):
             client.fetch_stats()
@@ -256,100 +256,175 @@ class TestUnrecognizableAPIResponses:
 def valid_dhcp4():
     config = {
         "Dhcp4": {
-            "valid-lifetime": 4000,
-            "renew-timer": 1000,
-            "rebind-timer": 2000,
-            "preferred-lifetime": 3000,
-            "interfaces-config": {"interfaces": ["eth0"]},
-            "lease-database": {
-                "type": "memfile",
-                "persist": True,
-                "name": "/var/lib/kea/dhcp6.leases",
+            "control-socket": {
+                "socket-name": "/run/kea/control_socket_4",
+                "socket-type": "unix"
             },
-            "subnet4": [
-                {
-                    "id": 1,
-                    "subnet": "192.0.1.0/24",
-                    "pools": [{"pool": "192.0.1.1-192.0.1.10"}],
-                },
-                {
-                    "id": 2,
-                    "subnet": "192.0.2.0/24",
-                    "pools": [
-                        {"pool": "192.0.2.1-192.0.2.10"},
-                        {"pool": "192.0.2.128/25"},
-                    ],
-                },
-            ],
+            "hooks-libraries": [],
+            "lease-database": {
+                "name": "/var/lib/kea/kea-leases4.csv",
+                "type": "memfile"
+            },
             "shared-networks": [
                 {
                     "name": "shared-network-1",
                     "subnet4": [
                         {
                             "id": 3,
-                            "subnet": "192.0.3.0/24",
                             "pools": [
-                                {"pool": "192.0.3.1-192.0.3.10"},
+                                {
+                                    "option-data": [],
+                                    "pool": "192.0.3.1-192.0.3.10",
+                                    "pool-id": 1,
+                                    "user-context": {
+                                        "name": "oslo-student"
+                                    }
+                                }
                             ],
+                            "subnet": "192.0.3.0/24",
                         },
                         {
                             "id": 4,
-                            "subnet": "192.0.4.1/24",
+                            "option-data": [],
                             "pools": [
-                                {"pool": "192.0.4.1-192.0.4.5"},
+                                {
+                                    "option-data": [],
+                                    "pool": "192.0.4.1-192.0.4.5",
+                                    "pool-id": 1,
+                                    "user-context": {
+                                        "name": "oslo-staff"
+                                    }
+                                }
                             ],
-                        },
+                            "subnet": "192.0.4.1/24",
+                        }
                     ],
+                    "valid-lifetime": 4000
                 },
                 {
                     "name": "shared-network-2",
                     "subnet4": [
                         {
                             "id": 5,
-                            "subnet": "192.0.5.0/24",
+                            "option-data": [],
                             "pools": [
-                                {"pool": "192.0.5.1-192.0.5.5"},
+                                {
+                                    "option-data": [],
+                                    "pool": "192.0.5.1-192.0.5.5",
+                                    "pool-id": 1,
+                                    "user-context": {
+                                        "name": "stavanger-staff"
+                                    }
+                                }
                             ],
+                            "subnet": "192.0.5.0/24",
                         }
                     ],
-                },
+                    "valid-lifetime": 4000
+                }
             ],
-        }
+            "subnet4": [
+                {
+                    "id": 1,
+                    "option-data": [],
+                    "pools": [
+                        {
+                            "option-data": [],
+                            "pool": "192.0.1.1-192.0.1.10",
+                            "pool-id": 1,
+                            "user-context": {
+                                "name": "bergen-staff"
+                            }
+                        }
+                    ],
+                    "subnet": "192.0.1.0/24",
+                },
+                {
+                    "id": 2,
+                    "option-data": [],
+                    "pools": [
+                        {
+                            "option-data": [],
+                            "pool": "192.0.2.1-192.0.2.10",
+                            "pool-id": 1
+                            "user-context": {
+                                "name": "bergen-student"
+                            }
+                        },
+                        {
+                            "option-data": [],
+                            "pool": "192.0.2.32/28",
+                            "pool-id": 3,
+                            "user-context": {
+                                "name": "bergen-student"
+                            }
+                        },
+                        {
+                            "option-data": [],
+                            "pool": "192.0.2.128/25",
+                            "pool-id": 2,
+                            "user-context": {
+                                "name": "bergen-student"
+                            }
+                        }
+                    ],
+                    "subnet": "192.0.2.0/24",
+                }
+            ],
+            "valid-lifetime": 4000
+        },
+        "hash": "40E1767436D123D5184DFBCE9B3C8E7F24C5F7DC7C11488C0029EF399502E373"
     }
+
     statistics = {
-        "subnet[1].assigned-addresses": [
-            [1, "2024-07-22 09:06:58.140438"],
-            [0, "2024-07-05 20:44:54.230608"],
-            [1, "2024-07-05 09:15:05.626594"],
+        "subnet[1].pool[1].assigned-addresses": [
+            [2, "2025-05-30 05:49:49.467993"],
+            [0, "2025-05-29 05:49:49.467993"],
+            [0, "2025-05-28 05:49:49.467993"]
         ],
-        "subnet[1].declined-addresses": [[0, "2024-07-03 16:13:59.401071"]],
-        "subnet[1].total-addresses": [[239, "2024-07-03 16:13:59.401058"]],
-        "subnet[2].assigned-addresses": [
-            [0, "2024-07-22 09:06:58.140439"],
-            [1, "2024-07-05 20:44:54.230609"],
-            [2, "2024-07-05 09:15:05.626595"],
+        "subnet[1].pool[1].declined-addresses": [
+            [1, "2025-05-30 05:49:49.467995"],
+            [0, "2025-05-29 05:49:49.467995"],
+            [0, "2025-05-28 05:49:49.467995"]
         ],
-        "subnet[2].declined-addresses": [[1, "2024-07-03 16:13:59.401072"]],
-        "subnet[2].total-addresses": [[240, "2024-07-03 16:13:59.401059"]],
-        "subnet[3].assigned-addresses": [
-            [4, "2024-07-22 09:06:58.140439"],
-            [5, "2024-07-05 20:44:54.230609"],
+        "subnet[1].pool[1].total-addresses": [
+            [10, "2025-05-30 05:49:49.467930"],
+            [8, "2025-05-29 05:49:49.467930"]
         ],
-        "subnet[3].declined-addresses": [[0, "2024-07-03 16:13:59.401072"]],
-        "subnet[3].total-addresses": [[241, "2024-07-03 16:13:59.401059"]],
-        "subnet[4].assigned-addresses": [
-            [1, "2024-07-22 09:06:58.140439"],
-            [1, "2024-07-05 20:44:54.230609"],
+        "subnet[2].pool[1].assigned-addresses": [
+            [0, "2025-05-30 05:49:49.468017"],
+            [1, "2025-05-29 05:49:49.468017"]
         ],
-        "subnet[4].declined-addresses": [[1, "2024-07-03 16:13:59.401072"]],
-        "subnet[4].total-addresses": [[242, "2024-07-03 16:13:59.401059"]],
-        "subnet[5].assigned-addresses": [
-            [1, "2024-07-22 09:06:58.140439"],
-            [1, "2024-07-05 20:44:54.230609"],
+        "subnet[2].pool[1].declined-addresses": [[1, "2025-05-30 05:49:49.468019"]],
+        "subnet[2].pool[1].total-addresses": [[10, "2025-05-30 05:49:49.467941"]],
+        "subnet[2].pool[2].assigned-addresses": [[1, "2025-05-30 05:49:49.468033"]],
+        "subnet[2].pool[2].declined-addresses": [[0, "2025-05-30 05:49:49.468035"]],
+        "subnet[2].pool[2].total-addresses": [[128, "2025-05-30 05:49:49.467949"]],
+        "subnet[2].pool[3].assigned-addresses": [
+            [0, "2025-05-30 05:49:49.468025"],
+            [2, "2025-05-29 05:49:49.468025"]
         ],
-        "subnet[5].declined-addresses": [[1, "2024-07-03 16:13:59.401072"]],
-        "subnet[5].total-addresses": [[243, "2024-07-03 16:13:59.401059"]],
+        "subnet[2].pool[3].declined-addresses": [
+            [0, "2025-05-30 05:49:49.468027"],
+            [3, "2025-05-29 05:49:49.468027"]
+        ],
+        "subnet[2].pool[3].total-addresses": [
+            [16, "2025-05-30 05:49:49.467945"],
+            [16, "2025-05-29 05:49:49.467945"],
+            [16, "2025-05-28 05:49:49.467945"]
+        ],
+        "subnet[3].pool[1].assigned-addresses": [[0, "2025-05-30 05:49:49.468051"]],
+        "subnet[3].pool[1].declined-addresses": [[0, "2025-05-30 05:49:49.468053"]],
+        "subnet[3].pool[1].total-addresses": [[10, "2025-05-30 05:49:49.467959"]],
+        "subnet[4].pool[1].assigned-addresses": [[0, "2025-05-30 05:49:49.468067"]],
+        "subnet[4].pool[1].declined-addresses": [[0, "2025-05-30 05:49:49.468070"]],
+        "subnet[4].pool[1].total-addresses": [[5, "2025-05-30 05:49:49.467968"]],
+        "subnet[5].pool[1].assigned-addresses": [[0, "2025-05-30 05:49:49.468085"]],
+        "subnet[5].pool[1].declined-addresses": [[0, "2025-05-30 05:49:49.468087"]],
+        "subnet[5].pool[1].total-addresses": [[5, "2025-05-30 05:49:49.467976"]]
     }
+
+
 
     # Each list in the 'statistics' response from the api (see above dict) is a
     # timeseries for a specific stat type for a specific subnet.  The first
@@ -357,105 +432,39 @@ def valid_dhcp4():
     # stat we expect to get for each stat type and subnet after processing
     # the api response.
     expected_stats = [
-        _Metric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140438+00:00").timestamp(),
-            IP("192.0.1.0/24"),
-            "assigned",
-            1,
-        ),
-        _Metric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401058+00:00").timestamp(),
-            IP("192.0.1.0/24"),
-            "total",
-            239,
-        ),
-        _Metric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401058+00:00").timestamp(),
-            IP("192.0.1.0/24"),
-            "declined",
-            0,
-        ),
-        _Metric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
-            IP("192.0.2.0/24"),
-            "assigned",
-            0,
-        ),
-        _Metric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
-            IP("192.0.2.0/24"),
-            "total",
-            240,
-        ),
-        _Metric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
-            IP("192.0.2.0/24"),
-            "declined",
-            1,
-        ),
-        _Metric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
-            IP("192.0.3.0/24"),
-            "assigned",
-            4,
-        ),
-        _Metric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
-            IP("192.0.3.0/24"),
-            "total",
-            241,
-        ),
-        _Metric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
-            IP("192.0.3.0/24"),
-            "declined",
-            0,
-        ),
-        _Metric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
-            IP("192.0.4.0/24"),
-            "assigned",
-            1,
-        ),
-        _Metric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
-            IP("192.0.4.0/24"),
-            "total",
-            242,
-        ),
-        _Metric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
-            IP("192.0.4.0/24"),
-            "declined",
-            1,
-        ),
-        _Metric(
-            datetime.fromisoformat("2024-07-22T09:06:58.140439+00:00").timestamp(),
-            IP("192.0.5.0/24"),
-            "assigned",
-            1,
-        ),
-        _Metric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
-            IP("192.0.5.0/24"),
-            "total",
-            243,
-        ),
-        _Metric(
-            datetime.fromisoformat("2024-07-03T16:13:59.401059+00:00").timestamp(),
-            IP("192.0.5.0/24"),
-            "declined",
-            1,
-        ),
+        ("nav.dhcp.pools.oslo-student.192_0_3_1.192_0_3_10.assigned", ()),
+        ("nav.dhcp.pools.oslo-student.192_0_3_1.192_0_3_10.declined", ()),
+        ("nav.dhcp.pools.oslo-student.192_0_3_1.192_0_3_10.total", ()),
+
+        ("nav.dhcp.pools.oslo-staff.192_0_4_1.192_0_4_5.assigned", ()),
+        ("nav.dhcp.pools.oslo-staff.192_0_4_1.192_0_4_5.declined", ()),
+        ("nav.dhcp.pools.oslo-staff.192_0_4_1.192_0_4_5.total", ()),
+
+        ("nav.dhcp.pools.stavanger-staff.192_0_5_1.192_0_5_5.assigned", ()),
+        ("nav.dhcp.pools.stavanger-staff.192_0_5_1.192_0_5_5.declined", ()),
+        ("nav.dhcp.pools.stavanger-staff.192_0_5_1.192_0_5_5.total", ()),
+
+        ("nav.dhcp.pools.bergen-staff.192_0_1_1.192_0_1_10.assigned", ()),
+        ("nav.dhcp.pools.bergen-staff.192_0_1_1.192_0_1_10.declined", ()),
+        ("nav.dhcp.pools.bergen-staff.192_0_1_1.192_0_1_10.total", ()),
+
+        ("nav.dhcp.pools.bergen-student.192_0_2_32.192_0_2_47.assigned", ()),
+        ("nav.dhcp.pools.bergen-student.192_0_2_32.192_0_2_47.declined", ()),
+        ("nav.dhcp.pools.bergen-student.192_0_2_32.192_0_2_47.total", ()),
+
+        ("nav.dhcp.pools.bergen-student.192_0_2_128.192_0_2_255.assigned", ()),
+        ("nav.dhcp.pools.bergen-student.192_0_2_128.192_0_2_255.declined", ()),
+        ("nav.dhcp.pools.bergen-student.192_0_2_128.192_0_2_255.total", ()),
     ]
+
 
     return config, statistics, expected_stats
 
 
-def kearesponse(val, status=_KeaStatus.SUCCESS):
+def make_api_response(val: dict, status:_KeaStatus=_KeaStatus.SUCCESS):
     """
     Make a Kea API conformant response body whose response value (called
-    response arguments in the specification) is given by the dictionary `val`
+    response 'arguments' in the specification) is given by the dictionary `val`
     """
     return f'''
 [
@@ -499,7 +508,7 @@ def responsequeue(monkeypatch):
     statistics `statistics`.
     """
     command_responses: dict[
-        str, deque[tuple[Union[str, Callable[[dict, list], str]], dict]]
+        str, deque[tuple[str | Callable[[dict, list], str], dict]]
     ] = {}
     unknown_command_response = """[
   {{
@@ -508,7 +517,7 @@ def responsequeue(monkeypatch):
   }}
 ]"""
 
-    def new_post_function(url, *args, data="{}", **kwargs):
+    def post_function_mock(url, *args, data="{}", **kwargs):
         """This function will replace requests.post()"""
         if isinstance(data, dict):
             data = json.dumps(data)
@@ -557,14 +566,14 @@ def responsequeue(monkeypatch):
 
         return response
 
-    def new_post_method(self, url, *args, **kwargs):
+    def post_method_mock(self, url, *args, **kwargs):
         """This function will replace requests.Session.post()"""
-        return new_post_function(url, *args, **kwargs)
+        return post_function_mock(url, *args, **kwargs)
 
-    def add_command_response(command_name, text, attrs=None):
+    def add_command_response(command_name, text_or_func, attrs=None):
         attrs = attrs or {}
         command_responses.setdefault(command_name, deque())
-        command_responses[command_name].append((text, attrs))
+        command_responses[command_name].append((text_or_func, attrs))
 
     def clear_command_responses():
         command_responses.clear()
@@ -575,31 +584,29 @@ def responsequeue(monkeypatch):
         attrs = attrs or {}
 
         if config is not None:
-
-            def config_get_response(arguments, service):
+            def config_response(arguments, service):
                 assert service == [
                     expected_service
-                ], f"API Client for service [{expected_service}] should not send requests to {service}"
-                return kearesponse(config)
+                ], f"API Client for service '{expected_service}' should not send requests to service '{service}'"
+                return make_api_response(config)
 
-            add_command_response("config-get", config_get_response, attrs)
+            add_command_response("config-get", config_response, attrs)
 
         if statistics is not None:
-
-            def statistic_get_response(arguments, service):
+            def statistic_response(arguments, service):
                 assert service == [
                     expected_service
-                ], f"API Client for service [{expected_service}] should not send requests to {service}"
-                return kearesponse({arguments["name"]: statistics[arguments["name"]]})
+                ], f"API Client for service '{expected_service}' should not send requests to service '{service}'"
+                return make_api_response({arguments["name"]: statistics[arguments["name"]]})
 
-            add_command_response("statistic-get", statistic_get_response, attrs)
+            add_command_response("statistic-get", statistic_response, attrs)
 
     class ResponseQueue:
         add = add_command_response
         clear = clear_command_responses
         autofill = autofill_command_responses
 
-    monkeypatch.setattr(requests, 'post', new_post_function)
-    monkeypatch.setattr(requests.Session, 'post', new_post_method)
+    monkeypatch.setattr(requests, 'post', post_function_mock)
+    monkeypatch.setattr(requests.Session, 'post', post_method_mock)
 
     return ResponseQueue
