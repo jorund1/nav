@@ -1,10 +1,11 @@
 import logging
+from unittest import mock
+from copy import deepcopy
 from collections import deque
 from nav.externalstats.kea_dhcp import *
 from nav.externalstats.kea_dhcp import _KeaStatus
 import pytest
 import requests
-from IPy import IP
 import json
 from requests.exceptions import JSONDecodeError
 from typing import Callable
@@ -58,9 +59,7 @@ class TestRecognizableAPIResponses:
         actual_stats = client.fetch_stats()
         assert len(actual_stats) > 0
         for (path, (time, value)) in actual_stats:
-            assert (
-                time >= (datetime.now() - timedelta(minutes=5)).timestamp()
-            )
+            assert time >= (datetime.now() - timedelta(minutes=5)).timestamp()
 
 
     def test_fetch_stats_should_handle_empty_config_in_config_api_response(
@@ -136,9 +135,7 @@ class TestRecognizableAPIResponses:
         assert list(client.fetch_stats()) == []
 
 
-    @pytest.mark.parametrize(
-        "http_status", range(400,500)
-    )
+    @pytest.mark.parametrize("http_status", range(400,500))
     def test_fetch_stats_should_raise_an_exception_on_http_error_response(
         self, valid_dhcp4, response_queue, http_status
     ):
@@ -231,15 +228,11 @@ class TestRecognizableAPIResponses:
             client.fetch_stats()
 
 
-@pytest.mark.parametrize(
-    "invalid_response", ["{}", "foo", "\x00"]
-)
+@pytest.mark.parametrize("invalid_response", ["{}", "foo", "\x00", "[]", "1"])
 class TestUnrecognizableAPIResponses:
     """
-    If Kea responds in an unrecognizable way, we should always fail loudly,
-    because chances are either the host we're sending requests to is not a Kea
-    Control Agent, or there's a part of the API that we've not covered
-    correctly.
+    Checks that the client fails loudly if the Kea Management API responds in an
+    unrecognizable way.
     """
 
     def test_fetch_stats_should_raise_an_exception_on_unrecognizable_config_api_response(
@@ -276,13 +269,102 @@ class TestUnrecognizableAPIResponses:
             client.fetch_stats()
 
 
+class TestConfigCaching:
+    """
+    Checks that the '_fetch_config()' method doesn't request the DHCP
+    configuration from the Kea Management API more often than necessary.
+    """
+
+    def test_fetch_config_should_not_refetch_config_if_its_hash_is_unchanged(
+            self, response_queue
+    ):
+        response_queue.add(
+            "config-get",
+            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}, "hash": "1"})
+        )
+        response_queue.add(
+            "config-hash-get",
+            lambda kea_arguments, kea_service: make_api_response({"hash": "1"})
+        )
+
+        client = Client("foo", "http://example.org/")
+        client._fetch_config()
+        client._fetch_config()
+
+        assert len(response_queue.requests["config-get"]) == 1
+
+
+    def test_fetch_config_should_refetch_config_if_its_hash_is_changed(
+            self, response_queue
+    ):
+        response_queue.add(
+            "config-get",
+            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}, "hash": "1"})
+        )
+        response_queue.add(
+            "config-hash-get",
+            lambda kea_arguments, kea_service: make_api_response({"hash": "2"})
+        )
+
+        client = Client("foo", "http://example.org/")
+        client._fetch_config()
+        client._fetch_config()
+
+        assert len(response_queue.requests["config-get"]) == 2
+
+
+    def test_fetch_config_should_refetch_config_if_its_hash_is_missing(
+            self, response_queue
+    ):
+        response_queue.add(
+            "config-get",
+            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}})
+        )
+        response_queue.add(
+            "config-hash-get",
+            lambda kea_arguments, kea_service: make_api_response({"hash": "1"})
+        )
+
+        client = Client("foo", "http://example.org/")
+        client._fetch_config()
+        client._fetch_config()
+
+        assert len(response_queue.requests["config-get"]) == 2
+
+
+    def test_fetch_config_should_refetch_config_if_config_hash_is_unsupported(
+            self, response_queue
+    ):
+        response_queue.add(
+            "config-get",
+            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}, "hash": "1"})
+        )
+
+        client = Client("foo", "http://example.org/")
+        client._fetch_config()
+        client._fetch_config()
+
+        assert len(response_queue.requests["config-get"]) == 2
+
 
 def test_fetch_stats_should_check_and_warn_if_server_config_changed_during_call(
         valid_dhcp4, response_queue, caplog
 ):
     config, statistics, _ = valid_dhcp4
     client = Client("foo", "http://example.org/")
-    response_queue.autofill("dhcp4", config=config, statistics=statistics)
+    response_queue.autofill("dhcp4", config=None, statistics=statistics)
+    response_queue.add("config-get", make_api_response(config))
+    updated_config = deepcopy(config)
+    updated_config["Dhcp4"]["subnet4"][0]["pools"][0]["pool"] = "42.0.1.1-42.0.1.5"
+    response_queue.add(
+        "config-get",
+        lambda kea_arguments, kea_service: make_api_response(updated_config)
+    )
+
+    with caplog.at_level(logging.WARNING):
+        client.fetch_stats()
+
+    assert "configuration was modified while stats were being fetched" in caplog.text
 
 
 def test_fetch_stats_should_warn_if_using_http(
@@ -299,7 +381,7 @@ def test_fetch_stats_should_warn_if_using_http(
     with caplog.at_level(logging.WARNING):
         client.fetch_stats()
 
-    assert "Using HTTP to request potentially sensitive data such as API passwords" in caplog.text.lower()
+    assert "Using HTTP to request potentially sensitive data such as API passwords" in caplog.text
 
 
 def test_fetch_stats_should_warn_if_using_http_basic_auth_with_http(
@@ -317,11 +399,11 @@ def test_fetch_stats_should_warn_if_using_http_basic_auth_with_http(
     with caplog.at_level(logging.WARNING):
         client.fetch_stats()
 
-    assert "Using HTTP Basic Authentication without HTTPS" in caplog.text.lower()
+    assert "Using HTTP Basic Authentication without HTTPS" in caplog.text
 
 
 def test_fetch_stats_should_error_if_using_client_certificate_with_http(
-    valid_dhcp4, response_queue, caplog
+    valid_dhcp4, response_queue
 ):
     """
     Client authentication is part of the TLS spec so it doesn't make sense to
@@ -573,11 +655,10 @@ def valid_dhcp4():
 
 
     # Each list in the 'statistics' response from the api (see above dict) is a
-    # timeseries for a specific stat type for a specific subnet.  The first
+    # timeseries for a specific stat type for a specific pool.  The first
     # stat in each list is assumed to be the most recent, and this is the
-    # stat we expect to get for each stat type and subnet after processing
+    # stat we expect to get for each stat type and pool after processing
     # the api response.
-
     expected_stats = [
         ("nav.dhcp.pools.bergen-staff.42_0_1_1.42_0_1_10.assigned", ("2025-05-30 05:49:49.467993", 2)),
         ("nav.dhcp.pools.bergen-staff.42_0_1_1.42_0_1_10.declined", ("2025-05-30 05:49:49.467993", 1)),
@@ -657,6 +738,7 @@ def response_queue(monkeypatch):
     ("dhcp4" for ipv4 DHCP "dhcp6" for ipv6 DHCP) with config `config` and
     statistics `statistics`.
     """
+    command_requests: dict[str, list[tuple[dict, list]]] = {}
     command_responses: dict[
         str, deque[tuple[str | Callable[[dict, list], str], dict]]
     ] = {}
@@ -687,6 +769,13 @@ def response_queue(monkeypatch):
                 "should be a JSON with a 'command' key. Instead, NAV sent "
                 f"\n\n{data!r}\n\n to the test's Kea Control Agent mock"
             )
+            raise
+
+        kea_arguments = data.get("arguments", {})
+        kea_service = data.get("service", [])
+
+        command_requests.setdefault(command, [])
+        command_requests[command].append((kea_arguments, kea_service))
 
         response_text = unknown_command_response.format(command)
         attrs = {}
@@ -694,8 +783,6 @@ def response_queue(monkeypatch):
         if fifo:
             text_or_func, attrs = fifo[0]
             if callable(text_or_func):
-                kea_arguments = data.get("arguments", {})
-                kea_service = data.get("service", [])
                 response_text = text_or_func(kea_arguments, kea_service)
             else:
                 response_text = str(text_or_func)
@@ -755,6 +842,7 @@ def response_queue(monkeypatch):
         add = add_command_response
         clear = clear_command_responses
         autofill = autofill_command_responses
+        requests = command_requests
 
     monkeypatch.setattr(requests, 'post', post_function_mock)
     monkeypatch.setattr(requests.Session, 'post', post_method_mock)
