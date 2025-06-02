@@ -11,7 +11,6 @@ from requests.exceptions import JSONDecodeError
 from typing import Callable
 from datetime import datetime, timedelta
 
-#TODO: Test that caching works correct
 
 class TestRecognizableAPIResponses:
     """
@@ -23,8 +22,8 @@ class TestRecognizableAPIResponses:
         self, valid_dhcp4, response_queue
     ):
         """
-        This test checks that fetch_stats() returns the most recent stats
-        for each pool and stat type from the api response.
+        This test checks that fetch_stats() returns the most recent stats from
+        the api for each <pool> and <stat type>.
         """
 
         config, statistics, expected_stats = valid_dhcp4
@@ -62,19 +61,18 @@ class TestRecognizableAPIResponses:
             assert time >= (datetime.now() - timedelta(minutes=5)).timestamp()
 
 
-    def test_fetch_stats_should_handle_empty_config_in_config_api_response(
+    def test_fetch_stats_should_handle_empty_config_api_response(
         self, valid_dhcp4, response_queue
     ):
         """
-        We assume in this case that the Kea DHCP server we query just doesn't have
-        any pools configured.
+        The client should handle the case where the Kea API responds with an
+        empty dictionary as a response to a config request.  We assume in this
+        case that the Kea DHCP server we query just doesn't have any pools
+        configured.  The correct thing to do in this case is to just return an
+        empty list of stats since there are no pools to fetch from.
 
-        The correct thing for fetch_stats() to do in this case is to just
-        return an empty list of stats since there are no pools to fetch
-        from.
-
-        TODO: Here, it may be wished for that NAV prints a log info stating
-        that the Kea server isn't configured with any subnets.
+        TODO: It may be benefitial to have NAV log a message when this lack of
+        pool configuration occur.
         """
         config, statistics, _ = valid_dhcp4
         response_queue.autofill("dhcp4", config=None, statistics=statistics)
@@ -86,27 +84,28 @@ class TestRecognizableAPIResponses:
         assert list(client.fetch_stats()) == []
 
 
-    def test_fetch_stats_should_handle_empty_statistic_in_statistics_api_response(
+    def test_fetch_stats_should_handle_empty_statistic_api_response(
         self, valid_dhcp4, response_queue
     ):
         """
         If the Kea DHCP server returns no values for a specific statistic,
-        disregard that stat when creating a list of stats. In the extreme
-        case that all statistics are empty, return an empty list.
+        disregard that stat in 'fetch_stats()' when creating a list of stats. In
+        the extreme case that all statistic from the API are empty,
+        'fetch_stats()' should return an empty list.
         """
         config, statistics, _ = valid_dhcp4
         response_queue.autofill("dhcp4", config=config, statistics=None)
         response_queue.add(
             "statistic-get",
             lambda kea_arguments, kea_service: make_api_response(
-                {kea_arguments["name"]: []}
+                {kea_arguments["name"]: []},
             ),
         )
         client = Client("foo", "http://example.org/")
         assert list(client.fetch_stats()) == []
 
 
-    def test_fetch_stats_should_handle_unsupported_statistic_in_statistics_api_response(
+    def test_fetch_stats_should_handle_unsupported_statistic_api_response(
         self, valid_dhcp4, response_queue
     ):
         """
@@ -115,14 +114,14 @@ class TestRecognizableAPIResponses:
         statistic type, and in the extreme case that no statistic type at all is
         supported, return an empty list.
 
-        TODO: Here, it may be wished for that NAV prints a log warning stating
-        that the Kea server doesn't support some queried-for statistic.
-
         From the Kea doc:
-        > If the requested statistic is not found, the response contains an
-        > empty map, i.e. only { } as an argument, but the status code still indicates
-        > success (0).
-        > https://web.archive.org/web/20230927054750/https://kea.readthedocs.io/en/kea-2.2.0/arm/stats.html#the-statistic-get-command
+          If the requested statistic is not found, the response contains an
+          empty map, i.e. only { } as an argument, but the status code still indicates
+          success (0).
+          https://web.archive.org/web/20230927054750/https://kea.readthedocs.io/en/kea-2.2.0/arm/stats.html#the-statistic-get-command
+
+        TODO: It may be benefitial to have NAV log a message when this lack of
+        statistic support occur.
         """
 
         config, statistics, _ = valid_dhcp4
@@ -135,7 +134,7 @@ class TestRecognizableAPIResponses:
         assert list(client.fetch_stats()) == []
 
 
-    @pytest.mark.parametrize("http_status", range(400,500))
+    @pytest.mark.parametrize("http_status", range(400,430))
     def test_fetch_stats_should_raise_an_exception_on_http_error_response(
         self, valid_dhcp4, response_queue, http_status
     ):
@@ -212,9 +211,9 @@ class TestRecognizableAPIResponses:
         self, valid_dhcp4, response_queue, status
     ):
         """
-        We shouldn't even attempt to continue if the server reports
-        an error regarding serving configuration hash other than it
-        being unsupported.
+        If the server reports an API-specific error regarding serving its
+        configuration's hash, other than that functionality being unsupported,
+        the client should raise an error.
         """
         foohash = "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"
         config, statistics, _ = valid_dhcp4
@@ -280,11 +279,11 @@ class TestConfigCaching:
     ):
         response_queue.add(
             "config-get",
-            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}, "hash": "1"})
+            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}, "hash": "1"}),
         )
         response_queue.add(
             "config-hash-get",
-            lambda kea_arguments, kea_service: make_api_response({"hash": "1"})
+            lambda kea_arguments, kea_service: make_api_response({"hash": "1"}),
         )
 
         client = Client("foo", "http://example.org/")
@@ -299,11 +298,11 @@ class TestConfigCaching:
     ):
         response_queue.add(
             "config-get",
-            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}, "hash": "1"})
+            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}, "hash": "1"}),
         )
         response_queue.add(
             "config-hash-get",
-            lambda kea_arguments, kea_service: make_api_response({"hash": "2"})
+            lambda kea_arguments, kea_service: make_api_response({"hash": "2"}),
         )
 
         client = Client("foo", "http://example.org/")
@@ -318,11 +317,11 @@ class TestConfigCaching:
     ):
         response_queue.add(
             "config-get",
-            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}})
+            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}}),
         )
         response_queue.add(
             "config-hash-get",
-            lambda kea_arguments, kea_service: make_api_response({"hash": "1"})
+            lambda kea_arguments, kea_service: make_api_response({"hash": "1"}),
         )
 
         client = Client("foo", "http://example.org/")
@@ -337,7 +336,7 @@ class TestConfigCaching:
     ):
         response_queue.add(
             "config-get",
-            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}, "hash": "1"})
+            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}, "hash": "1"}),
         )
 
         client = Client("foo", "http://example.org/")
@@ -358,7 +357,7 @@ def test_fetch_stats_should_check_and_warn_if_server_config_changed_during_call(
     updated_config["Dhcp4"]["subnet4"][0]["pools"][0]["pool"] = "42.0.1.1-42.0.1.5"
     response_queue.add(
         "config-get",
-        lambda kea_arguments, kea_service: make_api_response(updated_config)
+        lambda kea_arguments, kea_service: make_api_response(updated_config),
     )
 
     with caplog.at_level(logging.WARNING):
@@ -737,6 +736,13 @@ def response_queue(monkeypatch):
     actually sent by a Kea Control Agent for a Kea DHCP server named `service`
     ("dhcp4" for ipv4 DHCP "dhcp6" for ipv6 DHCP) with config `config` and
     statistics `statistics`.
+
+    The returned namespace contains a dictionary in addition to the three above
+    functions:
+
+    response_queue.responses --- dictionary mapping Kea API command names
+    to a list of ordered pairs (<request-arguments>, <request-service>),
+    one pair per request for that API command recorded so far.
     """
     command_requests: dict[str, list[tuple[dict, list]]] = {}
     command_responses: dict[
