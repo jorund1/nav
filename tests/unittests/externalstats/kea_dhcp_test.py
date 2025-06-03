@@ -139,7 +139,7 @@ class TestRecognizableAPIResponses:
         self, valid_dhcp4, response_queue, http_status
     ):
         """
-        If the server responds with a HTTP error, the client should raise an
+        If the server responds with an HTTP error, the client should raise an
         error.
         """
 
@@ -153,7 +153,7 @@ class TestRecognizableAPIResponses:
 
         client = Client("foo", "http://example.org/")
 
-        with pytest.raises(KeaException):
+        with pytest.raises(KeaUnexpected):
             client.fetch_stats()
 
 
@@ -174,7 +174,7 @@ class TestRecognizableAPIResponses:
             lambda kea_arguments, kea_service: make_api_response(config, status=kea_status)
         )
         client = Client("foo", "http://example.org/")
-        with pytest.raises(KeaException):
+        with pytest.raises(KeaUnexpected):
             client.fetch_stats()
 
 
@@ -195,7 +195,7 @@ class TestRecognizableAPIResponses:
             lambda kea_arguments, kea_service: make_api_response(statistics, status=status),
         )
         client = Client("foo", "http://example.org/")
-        with pytest.raises(KeaException):
+        with pytest.raises(KeaUnexpected):
             client.fetch_stats()
 
 
@@ -223,7 +223,7 @@ class TestRecognizableAPIResponses:
         response_queue.add(
             "config-hash-get", make_api_response({"hash": foohash}, status=status)
         )
-        with pytest.raises(KeaException):
+        with pytest.raises(KeaUnexpected):
             client.fetch_stats()
 
 
@@ -242,7 +242,7 @@ class TestUnrecognizableAPIResponses:
 
         response_queue.autofill("dhcp4", config=None, statistics=statistics)
         response_queue.add("config-get", invalid_response)
-        with pytest.raises(KeaException):
+        with pytest.raises(KeaUnexpected):
             client.fetch_stats()
 
     def test_fetch_stats_should_raise_an_exception_on_unrecognizable_statistic_api_response(
@@ -253,7 +253,7 @@ class TestUnrecognizableAPIResponses:
 
         response_queue.autofill("dhcp4", config=config, statistics=None)
         response_queue.add("statistic-get", invalid_response)
-        with pytest.raises(KeaException):
+        with pytest.raises(KeaUnexpected):
             client.fetch_stats()
 
     def test_fetch_stats_should_raise_an_exception_on_unrecognizable_config_hash_api_response(
@@ -264,7 +264,7 @@ class TestUnrecognizableAPIResponses:
         config["Dhcp4"]["hash"] = "foo"
         response_queue.autofill("dhcp4", config=config, statistics=statistics)
         response_queue.add("config-hash-get", invalid_response)
-        with pytest.raises(KeaException):
+        with pytest.raises(KeaUnexpected):
             client.fetch_stats()
 
 
@@ -726,7 +726,7 @@ def response_queue(monkeypatch):
     keyword (see again the function signature at the top of this paragraph) can
     optionally be set to a dictionary of attributes to set on the
     requests.Response response. Setting attrs={"status": 404} will cause the
-    response to be a HTTP 404 error.
+    response to be an HTTP 404 error.
 
     response_queue.clear() --- Empty the fifo queues of all commands. This
     removes all previously configured command responses.

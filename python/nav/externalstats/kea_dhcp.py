@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2024 Sikt
+# Copyright (C) 2025 Sikt
 #
 # This file is part of Network Administration Visualized (NAV).
 #
@@ -27,9 +27,9 @@ import logging
 from typing import Optional, Generator
 
 from IPy import IP
-from requests import RequestException, JSONDecodeError, Session
+from requests import HTTPError, RequestException, JSONDecodeError, Session
 
-from nav.errors import GeneralException
+from nav.externalstats.errors import CommunicationError, RetryError
 from nav.metrics.templates import metric_path_for_dhcp_pool
 
 _logger = logging.getLogger(__name__)
@@ -135,15 +135,8 @@ class Client:
 
         If the Kea API responds with an empty response to one or more of the
         requests for some stat(s), these stats will be missing in the returned
-        list, but a list is still succesfully returned. Other errors while
-        requesting stats will cause a fitting subclass of KeaException to be
-        raised:
-
-        * Communication errors (HTTP errors, JSON errors, access control errors,
-          unexpected responses) causes KeaException to be raised.
-
-        * A Kea API that doesn't support the bare-minimum set of commands this
-          client needs for fetching stats, causes KeaUnsupported to be raised.
+        list, but a list is still succesfully returned. Other errors during this
+        call will cause either a AbortError or a RetryError to be raised.
         """
         self._session = self._create_session()
         #TODO: remove local time stuff
@@ -314,7 +307,7 @@ class Client:
             try:
                 self._dhcp_config = response["arguments"][f"Dhcp{self._dhcp_version}"]
             except KeyError as err:
-                raise KeaException(
+                raise KeaUnexpected(
                     "Unrecognizable response to a 'config-get' request"
                 ) from err
         return self._dhcp_config or {}
@@ -378,14 +371,14 @@ class Client:
             responses.raise_for_status()
             responses = responses.json()
         except JSONDecodeError as err:
-            raise KeaException(
+            raise KeaUnexpected(
                 "%s does not look like a Kea API endpoint; "
                 "response to command '%s' was not valid JSON",
                 self._url,
                 command,
             ) from err
         except RequestException as err:
-            raise KeaException(err.strerror) from err
+            raise CommunicationError from err
 
         # Any valid response from Kea is a JSON list with one entry corresponding to the
         # response from either the dhcp4 or dhcp6 service we queried
@@ -395,9 +388,9 @@ class Client:
             case {"result": int(status), "text": str(message)}:
                 # If the response is a JSON object it's a specific error message
                 # See https://kea.readthedocs.io/en/kea-2.6.0/arm/ctrl-channel.html#control-agent-command-response-format
-                raise KeaException(f"{status}: {message}")
+                raise KeaUnexpected(f"{status}: {message}")
             case _:
-                raise KeaException(
+                raise KeaUnexpected(
                     "%s does not look like a Kea API; "
                     "response JSON structured in an unknown way",
                     self._url,
@@ -421,7 +414,7 @@ class Client:
             raise KeaError
         elif status == _KeaStatus.CONFLICT:
             raise KeaConflict
-        raise KeaException("Unkown response status")
+        raise KeaUnexpected("Unkown response status")
 
     def _create_session(self) -> Session:
         """
@@ -461,24 +454,27 @@ class Client:
         return session
 
 
-class KeaException(GeneralException):
+class KeaUnexpected(CommunicationError):
     """An unexpected error occurred when communicating with Kea"""
 
 
-class KeaError(KeaException):
-    """Kea failed during command processing"""
+class KeaError(CommunicationError):
+    """(API specific) Kea failed during command processing"""
 
 
-class KeaUnsupported(KeaException):
-    """Unsupported command"""
+class KeaUnsupported(CommunicationError):
+    """(API specific) Unsupported command"""
 
 
-class KeaEmpty(KeaException):
-    """Requested resource not found"""
+class KeaEmpty(CommunicationError):
+    """(API specific) Requested resource not found"""
 
 
-class KeaConflict(KeaException):
-    """Kea failed to apply requested changes due to conflicts with its server state"""
+class KeaConflict(CommunicationError):
+    """
+    (API specific) Kea failed to apply requested changes due to conflicts with
+    its server state
+    """
 
 
 class _KeaStatus(IntEnum):
