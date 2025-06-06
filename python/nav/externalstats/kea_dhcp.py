@@ -24,12 +24,15 @@ from enum import IntEnum
 from itertools import chain
 import json
 import logging
-from typing import Optional, Generator
+from typing import Optional, Iterator
 
 from IPy import IP
 from requests import HTTPError, RequestException, JSONDecodeError, Session
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 
-from nav.externalstats.errors import CommunicationError, RetryError
+
+from nav.errors import CommunicationError, ConfigurationError
 from nav.metrics.templates import metric_path_for_dhcp_pool
 
 _logger = logging.getLogger(__name__)
@@ -94,7 +97,7 @@ class Client:
         client_cert_path: str = "",
         client_cert_key_path: str = "",
         user_context_poolname_key: str = "name",
-        timeout: int = 10,
+        timeout: int = 5,
     ):
         self._name: str = name
         self._url: str = url
@@ -173,7 +176,7 @@ class Client:
         )
         return stats
 
-    def _fetch_pools(self) -> Generator[_Pool]:
+    def _fetch_pools(self) -> Iterator[_Pool]:
         """
         Returns one _Pool instance per pool listed in the Kea DHCP server's
         configuration.
@@ -191,7 +194,7 @@ class Client:
             yield from self._get_subnet_pools(subnet)
 
 
-    def _get_subnet_pools(self, subnet: dict) -> Generator[_Pool]:
+    def _get_subnet_pools(self, subnet: dict) -> Iterator[_Pool]:
         """
         Returns one _Pool instance per pool configured for a subnet in a Kea
         DHCP server's configuration.
@@ -251,7 +254,7 @@ class Client:
             )
 
 
-    def _fetch_pool_stats(self, pool: _Pool) -> Generator[_Metric]:
+    def _fetch_pool_stats(self, pool: _Pool) -> Iterator[_Metric]:
         for stat_name, api_naming in self._api_namings:
             value = self._fetch_pool_stat(pool, api_naming)
             if value is None:
@@ -425,6 +428,16 @@ class Client:
 
         session = Session()
 
+        retries = Retry(
+            total=3,
+            backoff_factor=0.1,
+            status_forcelist=[500, 502, 503, 504],
+            allowed_methods={"POST"},
+        )
+
+        session.mount("https://", HTTPAdapter(max_retries=retries))
+        session.mount("http://", HTTPAdapter(max_retries=retries))
+
         https = self._url.startswith("https://")
 
         if not https:
@@ -442,6 +455,11 @@ class Client:
 
         if self._client_cert_path:
             _logger.debug("Using client certificate authentication")
+            if not https:
+                raise ConfigurationError(
+                    "Authentication using client certificates is only available for urls "
+                    "with HTTPS scheme"
+                )
             _logger.debug("Certificate path: '%s'", self._client_cert_path)
             if self._client_key_path:
                 _logger.debug("Certificate key path: '%s'", self._client_key_path)

@@ -153,7 +153,7 @@ class TestRecognizableAPIResponses:
 
         client = Client("foo", "http://example.org/")
 
-        with pytest.raises(KeaUnexpected):
+        with pytest.raises(CommunicationError):
             client.fetch_stats()
 
 
@@ -174,12 +174,12 @@ class TestRecognizableAPIResponses:
             lambda kea_arguments, kea_service: make_api_response(config, status=kea_status)
         )
         client = Client("foo", "http://example.org/")
-        with pytest.raises(KeaUnexpected):
+        with pytest.raises(CommunicationError):
             client.fetch_stats()
 
 
     @pytest.mark.parametrize(
-        "status", [status for status in _KeaStatus if status != _KeaStatus.SUCCESS]
+        "status", [status for status in _KeaStatus if status not in (_KeaStatus.SUCCESS, _KeaStatus.EMPTY)]
     )
     def test_fetch_stats_should_raise_an_exception_on_error_status_in_statistic_api_response(
         self, valid_dhcp4, response_queue, status
@@ -195,7 +195,7 @@ class TestRecognizableAPIResponses:
             lambda kea_arguments, kea_service: make_api_response(statistics, status=status),
         )
         client = Client("foo", "http://example.org/")
-        with pytest.raises(KeaUnexpected):
+        with pytest.raises(CommunicationError):
             client.fetch_stats()
 
 
@@ -223,7 +223,7 @@ class TestRecognizableAPIResponses:
         response_queue.add(
             "config-hash-get", make_api_response({"hash": foohash}, status=status)
         )
-        with pytest.raises(KeaUnexpected):
+        with pytest.raises(CommunicationError):
             client.fetch_stats()
 
 
@@ -279,7 +279,7 @@ class TestConfigCaching:
     ):
         response_queue.add(
             "config-get",
-            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}, "hash": "1"}),
+            lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {"hash": "1"}}),
         )
         response_queue.add(
             "config-hash-get",
@@ -414,7 +414,7 @@ def test_fetch_stats_should_error_if_using_client_certificate_with_http(
     client = Client("foo", "http://example.org/", client_cert_path="/bar/baz.pem")
     response_queue.autofill("dhcp4", config=config, statistics=statistics)
 
-    with pytest.raises(Exception):
+    with pytest.raises(ConfigurationError):
         client.fetch_stats()
 
 
@@ -439,7 +439,7 @@ def test_fetch_stats_should_use_http_basic_auth_when_this_is_configured(
     post = Session.post
     check_was_called = False
     def check_auth(self, *args, **kwargs):
-        global check_was_called
+        nonlocal check_was_called
         check_was_called = True
         assert self.auth == ("bar", "baz")
         return post(self, *args, **kwargs)
@@ -461,7 +461,7 @@ def test_fetch_stats_should_use_client_certificates_when_this_is_configured(
     config, statistics, _ = valid_dhcp4
     client = Client(
         "foo",
-        "http://example.org/",
+        "https://example.org/",
         client_cert_path="/bar/baz.pem",
     )
     response_queue.autofill("dhcp4", config=config, statistics=statistics)
@@ -469,7 +469,7 @@ def test_fetch_stats_should_use_client_certificates_when_this_is_configured(
     post = Session.post
     check_was_called = False
     def check_cert(self, *args, **kwargs):
-        global check_was_called
+        nonlocal check_was_called
         check_was_called = True
         assert self.cert == "/bar/baz.pem"
         return post(self, *args, **kwargs)
@@ -659,33 +659,33 @@ def valid_dhcp4():
     # stat we expect to get for each stat type and pool after processing
     # the api response.
     expected_stats = [
-        ("nav.dhcp.pools.bergen-staff.42_0_1_1.42_0_1_10.assigned", ("2025-05-30 05:49:49.467993", 2)),
-        ("nav.dhcp.pools.bergen-staff.42_0_1_1.42_0_1_10.declined", ("2025-05-30 05:49:49.467993", 1)),
-        ("nav.dhcp.pools.bergen-staff.42_0_1_1.42_0_1_10.total", ("2025-05-30 05:49:49.467993", 10)),
+        ("nav.dhcp.pool.bergen-staff.42_0_1_1.42_0_1_10.assigned", ("2025-05-30 05:49:49.467993", 2)),
+        ("nav.dhcp.pool.bergen-staff.42_0_1_1.42_0_1_10.declined", ("2025-05-30 05:49:49.467993", 1)),
+        ("nav.dhcp.pool.bergen-staff.42_0_1_1.42_0_1_10.total", ("2025-05-30 05:49:49.467993", 10)),
 
-        ("nav.dhcp.pools.bergen-student.42_0_2_1.42_0_2_10.assigned", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pools.bergen-student.42_0_2_1.42_0_2_10.declined", ("2025-05-30 05:49:49.467993", 1)),
-        ("nav.dhcp.pools.bergen-student.42_0_2_1.42_0_2_10.total", ("2025-05-30 05:49:49.467993", 10)),
+        ("nav.dhcp.pool.bergen-student.42_0_2_1.42_0_2_10.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pool.bergen-student.42_0_2_1.42_0_2_10.declined", ("2025-05-30 05:49:49.467993", 1)),
+        ("nav.dhcp.pool.bergen-student.42_0_2_1.42_0_2_10.total", ("2025-05-30 05:49:49.467993", 10)),
 
-        ("nav.dhcp.pools.bergen-student.42_0_2_128.42_0_2_255.assigned", ("2025-05-30 05:49:49.467993", 1)),
-        ("nav.dhcp.pools.bergen-student.42_0_2_128.42_0_2_255.declined", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pools.bergen-student.42_0_2_128.42_0_2_255.total", ("2025-05-30 05:49:49.467993", 128)),
+        ("nav.dhcp.pool.bergen-student.42_0_2_128.42_0_2_255.assigned", ("2025-05-30 05:49:49.467993", 1)),
+        ("nav.dhcp.pool.bergen-student.42_0_2_128.42_0_2_255.declined", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pool.bergen-student.42_0_2_128.42_0_2_255.total", ("2025-05-30 05:49:49.467993", 128)),
 
-        ("nav.dhcp.pools.bergen-student.42_0_2_32.42_0_2_47.assigned", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pools.bergen-student.42_0_2_32.42_0_2_47.declined", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pools.bergen-student.42_0_2_32.42_0_2_47.total", ("2025-05-30 05:49:49.467993", 16)),
+        ("nav.dhcp.pool.bergen-student.42_0_2_32.42_0_2_47.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pool.bergen-student.42_0_2_32.42_0_2_47.declined", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pool.bergen-student.42_0_2_32.42_0_2_47.total", ("2025-05-30 05:49:49.467993", 16)),
 
-        ("nav.dhcp.pools.oslo-student.42_0_3_1.42_0_3_10.assigned", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pools.oslo-student.42_0_3_1.42_0_3_10.declined", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pools.oslo-student.42_0_3_1.42_0_3_10.total", ("2025-05-30 05:49:49.467993", 10)),
+        ("nav.dhcp.pool.oslo-student.42_0_3_1.42_0_3_10.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pool.oslo-student.42_0_3_1.42_0_3_10.declined", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pool.oslo-student.42_0_3_1.42_0_3_10.total", ("2025-05-30 05:49:49.467993", 10)),
 
-        ("nav.dhcp.pools.oslo-staff.42_0_4_1.42_0_4_5.assigned", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pools.oslo-staff.42_0_4_1.42_0_4_5.declined", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pools.oslo-staff.42_0_4_1.42_0_4_5.total", ("2025-05-30 05:49:49.467993", 5)),
+        ("nav.dhcp.pool.oslo-staff.42_0_4_1.42_0_4_5.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pool.oslo-staff.42_0_4_1.42_0_4_5.declined", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pool.oslo-staff.42_0_4_1.42_0_4_5.total", ("2025-05-30 05:49:49.467993", 5)),
 
-        ("nav.dhcp.pools.stavanger-staff.42_0_5_1.42_0_5_5.assigned", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pools.stavanger-staff.42_0_5_1.42_0_5_5.declined", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pools.stavanger-staff.42_0_5_1.42_0_5_5.total", ("2025-05-30 05:49:49.467993", 5)),
+        ("nav.dhcp.pool.stavanger-staff.42_0_5_1.42_0_5_5.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pool.stavanger-staff.42_0_5_1.42_0_5_5.declined", ("2025-05-30 05:49:49.467993", 0)),
+        ("nav.dhcp.pool.stavanger-staff.42_0_5_1.42_0_5_5.total", ("2025-05-30 05:49:49.467993", 5)),
     ]
 
     return config, statistics, expected_stats
