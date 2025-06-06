@@ -38,7 +38,7 @@ class ThresholdRule(models.Model):
         null=True,
         blank=True,
         help_text='The threshold for cancelling an alert. '
-        'Uses same format as the threshold field',
+        'Uses same format as the alert field',
     )
     raw = models.BooleanField(default=False)
     period = models.IntegerField(

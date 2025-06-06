@@ -19,68 +19,39 @@ Fetch DHCP stats from Kea DHCP servers, using the Kea API
 
 from dataclasses import dataclass
 from datetime import datetime
-import time
 from enum import IntEnum
 from itertools import chain
 import json
 import logging
+import time
 from typing import Optional, Iterator
 
 from IPy import IP
-from requests import HTTPError, RequestException, JSONDecodeError, Session
+from requests import RequestException, JSONDecodeError, Session
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-
 from nav.errors import CommunicationError, ConfigurationError
+from nav.externalstats.defines import Pool, GraphiteMetric
 from nav.metrics.templates import metric_path_for_dhcp_pool
+
 
 _logger = logging.getLogger(__name__)
 
 
-@dataclass(order=True, frozen=True)
-class _Pool:
-    """
-    A Kea DHCP configured pool
-
-    An example Kea DHCP configuration looks like the following:
-    {
-        "Dhcp4": {
-            "subnet4": [
-                {
-                    "pool-id": 1,
-                    "subnet": "192.0.2.0/24",
-                    "pools": [
-                        {
-                            "pool-id": 1,
-                            "pool": "192.0.2.1 - 192.0.2.200",
-                            "user-context": {
-                                "name": "foo"
-                            }
-                        }
-                    ]
-                }
-            ]
-        }
-    }
-    """
-
+@dataclass(order=True, frozen=True, kw_only=True)
+class KeaPool(Pool):
+    """A Kea DHCP configured address pool"""
     subnet_id: int
     pool_id: int
-    name: str
-    range_start: IP
-    range_end: IP
-
-
-_Metric = tuple[str, tuple[int, int]]
 
 
 class Client:
     """
     Fetches DHCP stats for each address pool managed by some Kea DHCP server by using
-    the Kea API
+    the Kea API. See 'Client.fetch_stats()'.
 
-    TODO: This client assumes no hooks have been installed into the Kea DHCP
+    Note: This client assumes no hooks have been installed into the Kea DHCP
           server. The 'lease-stats' hook is required for reliable stats when
           multiple servers share the same lease database because the standard
           commands issue the cache, not the DB. This client does not support the
@@ -122,7 +93,8 @@ class Client:
         else:
             raise ValueError(f"DHCPv{dhcp_version} is not supported")
 
-    def fetch_stats(self) -> list[_Metric]:
+
+    def fetch_stats(self) -> list[GraphiteMetric]:
         """
         Fetches and returns a list containing the most recent stats for each
         DHCP address pool. The stats collected for each address pool are:
@@ -139,7 +111,7 @@ class Client:
         If the Kea API responds with an empty response to one or more of the
         requests for some stat(s), these stats will be missing in the returned
         list, but a list is still succesfully returned. Other errors during this
-        call will cause either a AbortError or a RetryError to be raised.
+        call will cause a subclass of nav.errors.CommunicationError to be raised.
         """
         self._session = self._create_session()
         #TODO: remove local time stuff
@@ -176,7 +148,8 @@ class Client:
         )
         return stats
 
-    def _fetch_pools(self) -> Iterator[_Pool]:
+
+    def _fetch_pools(self) -> Iterator[KeaPool]:
         """
         Returns one _Pool instance per pool listed in the Kea DHCP server's
         configuration.
@@ -191,80 +164,26 @@ class Client:
                 for network in config.get("shared-networks", [])
             ]
         ):
-            yield from self._get_subnet_pools(subnet)
+            yield from self._pools_of_subnet(subnet)
 
 
-    def _get_subnet_pools(self, subnet: dict) -> Iterator[_Pool]:
-        """
-        Returns one _Pool instance per pool configured for a subnet in a Kea
-        DHCP server's configuration.
-        """
-        match subnet:
-            case {"id": int(subnet_id)}:
-                pass
-            case _:
-                _logger.debug(
-                    "Misconfigured subnet from %s, skipping...",
-                    self._url,
-                )
-                return
-
-        for pool in subnet.get("pools", []):
-            match pool:
-                case {"pool-id": int(pool_id), "pool": str(pool_range)}:
-                    pass
-                case _:
-                    _logger.debug(
-                        'Misconfigured pool for subnet with id %d from %s, skipping... '
-                        '(make sure every pool has "pool-id" and "pool" configured)',
-                        subnet_id,
-                        self._url,
-                    )
-                    continue
-
-            name = pool.get("user-context", {}).get(self._user_context_poolname_key, None)
-            name = name if isinstance(name, str) else ""
-
-            try:
-                if "-" in pool_range:
-                    # x.x.x.x - x.x.x.x
-                    range_start, _, range_end = pool_range.partition("-")
-                    range_start = IP(range_start.strip())
-                    range_end = IP(range_end.strip())
-                else:
-                    # x.x.x.x/m
-                    ip = IP(pool_range.strip())
-                    range_start = IP(ip[0])
-                    range_end = IP(ip[-1])
-            except ValueError:
-                _logger.debug(
-                    "Pool range in pool with id %d from %s configured with unknown format '%s', skipping...",
-                    pool_id,
-                    self._url,
-                    pool_range,
-                )
-                continue
-
-            yield _Pool(
-                subnet_id=subnet_id,
-                pool_id=pool_id,
-                name=name,
-                range_start=range_start,
-                range_end=range_end,
-            )
-
-
-    def _fetch_pool_stats(self, pool: _Pool) -> Iterator[_Metric]:
+    def _fetch_pool_stats(self, pool: KeaPool) -> Iterator[GraphiteMetric]:
         for stat_name, api_naming in self._api_namings:
-            value = self._fetch_pool_stat(pool, api_naming)
+            value = self._fetch_pool_stat_value(pool, api_naming)
             if value is None:
                 continue
-            path = metric_path_for_dhcp_pool(pool.name, pool.range_start, pool.range_end, stat_name)
+            path = metric_path_for_dhcp_pool(
+                self._name,
+                pool.name,
+                pool.range_start,
+                pool.range_end,
+                stat_name
+            )
             yield (path, (self._start_time, value))
 
 
-    def _fetch_pool_stat(
-        self, pool: _Pool, api_stat_name: str
+    def _fetch_pool_stat_value(
+        self, pool: KeaPool, api_stat_name: str
     ) -> Optional[int]:
         """
         Return the most recent stat value recorded by the Kea DHCP server for
@@ -296,6 +215,7 @@ class Client:
         value, timestring = samples[0]
         return value
 
+
     def _fetch_config(self) -> dict:
         """
         Returns the current config of the Kea DHCP server that the Kea
@@ -315,6 +235,7 @@ class Client:
                 ) from err
         return self._dhcp_config or {}
 
+
     def _fetch_config_hash(self) -> Optional[str]:
         """
         Returns the hash of the current config of the Kea DHCP server
@@ -329,6 +250,7 @@ class Client:
         except KeaUnsupported as err:
             _logger.debug(str(err))
             return None
+
 
     def _send_query(self, command: str, **kwargs) -> dict:
         """
@@ -407,17 +329,70 @@ class Client:
             response.get("text", "(no description)")
         )
 
-        if status == _KeaStatus.SUCCESS:
-            return response
-        elif status == _KeaStatus.UNSUPPORTED:
-            raise KeaUnsupported
-        elif status == _KeaStatus.EMPTY:
-            raise KeaEmpty
-        elif status == _KeaStatus.ERROR:
-            raise KeaError
-        elif status == _KeaStatus.CONFLICT:
-            raise KeaConflict
-        raise KeaUnexpected("Unkown response status")
+        _raise_for_kea_status(status)
+
+        return response
+
+
+    def _pools_of_subnet(self, subnet: dict) -> Iterator[KeaPool]:
+        """
+        Returns one _Pool instance per pool configured for a subnet in a Kea
+        DHCP server's configuration.
+        """
+        match subnet:
+            case {"id": int(subnet_id)}:
+                pass
+            case _:
+                _logger.debug(
+                    "Misconfigured subnet from %s, skipping...",
+                    self._url,
+                )
+                return
+
+        for pool in subnet.get("pools", []):
+            match pool:
+                case {"pool-id": int(pool_id), "pool": str(pool_range)}:
+                    pass
+                case _:
+                    _logger.debug(
+                        'Misconfigured pool for subnet with id %d from %s, skipping... '
+                        '(make sure every pool has "pool-id" and "pool" configured)',
+                        subnet_id,
+                        self._url,
+                    )
+                    continue
+
+            name = pool.get("user-context", {}).get(self._user_context_poolname_key, None)
+            name = name if isinstance(name, str) else ""
+
+            try:
+                if "-" in pool_range:
+                    # x.x.x.x - x.x.x.x
+                    range_start, _, range_end = pool_range.partition("-")
+                    range_start = IP(range_start.strip())
+                    range_end = IP(range_end.strip())
+                else:
+                    # x.x.x.x/m
+                    ip = IP(pool_range.strip())
+                    range_start = IP(ip[0])
+                    range_end = IP(ip[-1])
+            except ValueError:
+                _logger.debug(
+                    "Pool range in pool with id %d from %s configured with unknown format '%s', skipping...",
+                    pool_id,
+                    self._url,
+                    pool_range,
+                )
+                continue
+
+            yield KeaPool(
+                subnet_id=subnet_id,
+                pool_id=pool_id,
+                name=name,
+                range_start=range_start,
+                range_end=range_end,
+            )
+
 
     def _create_session(self) -> Session:
         """
@@ -503,3 +478,21 @@ class _KeaStatus(IntEnum):
     UNSUPPORTED = 2
     EMPTY = 3
     CONFLICT = 4
+
+def _raise_for_kea_status(status: int):
+    """
+    Raises a suitable subclass of CommunicationError if 'status' is not
+    _KeaStatus.SUCCESS.
+    """
+    if status == _KeaStatus.SUCCESS:
+        return
+    elif status == _KeaStatus.UNSUPPORTED:
+        raise KeaUnsupported
+    elif status == _KeaStatus.EMPTY:
+        raise KeaEmpty
+    elif status == _KeaStatus.ERROR:
+        raise KeaError
+    elif status == _KeaStatus.CONFLICT:
+        raise KeaConflict
+    else:
+        raise KeaUnexpected("Unkown response status")

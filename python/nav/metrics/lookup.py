@@ -20,7 +20,7 @@ from functools import lru_cache
 import re
 
 from nav.models.manage import Netbox, Interface, Prefix, Sensor
-
+from nav.externalstats.dhcp import Pool
 
 __all__ = ['reverses', 'lookup']
 _reverse_handlers = []
@@ -101,6 +101,11 @@ def _reverse_device(sysname):
 def _reverse_prefix(netaddr):
     return _single_like_match(Prefix, netaddr=netaddr)
 
+@reverses(r'\.dhcp\.pool\.(?P<server_name>[^.]+).(?P<pool_name>[^.]+).(?P<range_start>[0-9_]+).(?P<range_end>[0-9_]+)$')
+def _reverse_dhcp_pool(abc):
+    #TODO: This is a bad idea possibly since nav.external.dhcp.Pool is not a 'NAV object' and hence may cause errors when used as a subject in thresholdmon's alerts
+    #TODO: Instead, then, map this pool to the first nav.models.manage.Prefix you find? Or Subnet?
+    pass
 
 ### Helper functions
 

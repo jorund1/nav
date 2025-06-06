@@ -134,7 +134,7 @@ class TestRecognizableAPIResponses:
         assert list(client.fetch_stats()) == []
 
 
-    @pytest.mark.parametrize("http_status", range(400,430))
+    @pytest.mark.parametrize("http_status", chain(range(400,430), range(500,530)))
     def test_fetch_stats_should_raise_an_exception_on_http_error_response(
         self, valid_dhcp4, response_queue, http_status
     ):
