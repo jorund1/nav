@@ -12,13 +12,14 @@ from math import trunc
 import pathlib
 import pickle
 import re
+import string
 import socket
 import struct
 import subprocess
 import sys
 from time import time
 
-DEFAULT_PREFIX = "nav.dhcp"
+DEFAULT_PREFIX = "nav"
 DEFAULT_CONFIG_FILE = "/etc/dhcpd/dhcpd.conf"
 DEFAULT_CMD_PATH = pathlib.Path("/usr/bin/dhcpd-pools")
 DEFAULT_PORT = "2004"
@@ -27,12 +28,8 @@ DEFAULT_PROTOCOL = 'text'  # MB doesn't trust pickle so we go with text
 # graphite likes pickle protocol 2. Python 3: 3, Python 3.8+: 4
 PICKLE_PROTOCOL = range(0, pickle.HIGHEST_PROTOCOL + 1)
 FLAGS = "-f j"
-METRIC_MAPPER = {
-    "defined": "max",
-    "used": "cur",
-    "touched": "touch",
-    "free": "free",
-}
+LEGAL_METRIC_CHARACTERS = string.ascii_letters + string.digits + "-_"
+
 
 
 Metric = namedtuple("Metric", ["path", "value", "timestamp"])
@@ -72,16 +69,16 @@ def parse_args():
         type=str,
         default=DEFAULT_PREFIX,
     )
-    parser.add_argument(
-        "-l",
-        "--location",
-        help=(
-            "Location, if any, to append to the metric prefix to build the path."
-            ' If the vlan is named "vlan1" and the location is "building1.cellar"'
-            " the resulting metric path would be PREFIX.building1.cellar.vlan1"
-        ),
-        type=str,
-    )
+    # parser.add_argument(
+    #     "-l",
+    #     "--location",
+    #     help=(
+    #         "Location, if any, to append to the metric prefix to build the path."
+    #         ' If the vlan is named "vlan1" and the location is "building1.cellar"'
+    #         " the resulting metric path would be PREFIX.building1.cellar.vlan1"
+    #     ),
+    #     type=str,
+    # )
     protocol_choices = ("text",) + tuple(str(p) for p in PICKLE_PROTOCOL)
     parser.add_argument(
         "-P",
@@ -109,9 +106,9 @@ def parse_args():
             args.port = "2004"
         else:
             args.port = "2003"
-    args.actual_prefix = args.prefix
-    if args.location:
-        args.actual_prefix += f".{args.location}"
+    args.actual_prefix = args.prefix + ".dhcp.pools"
+    # if args.location:
+    #     args.actual_prefix += f".{args.location}"
     return args
 
 
@@ -155,25 +152,36 @@ def _render_pickle(jsonblob, prefix, protocol):
 
 def _tuplify(jsonblob, prefix):
     timestamp = trunc(time())
-    data = jsonblob["shared-networks"]
+    data = jsonblob["subnets"]
     output = list()
-    for vlan_stat in data:
-        vlan = _clean_vlan(vlan_stat["location"])
-        if not vlan:
-            continue
-        for key, metric in METRIC_MAPPER.items():
-            path = f"{prefix}.{vlan}.{metric}"
-            value = vlan_stat[key]
+    for pool in data:
+        range_start, range_end = _parse_pool_range(pool["range"])
+        pool_name = pool["location"]
+        if not pool_name:
+            pool_name = f"{range_start}-{range_end}"
+
+        total_addrs    = int(pool["defined"])
+        assigned_addrs = total_addrs - int(pool["free"])
+        declined_addrs = int(pool["touched"])
+
+        for metric, value in (
+                ("total",    total_addrs),
+                ("assigned", assigned_addrs),
+                ("declined", declined_addrs),
+        ):
+            path = f"{prefix}.{server_name}.{pool_name}.{range_start}.{range_end}.{metric}"
             output.append(Metric(path, value, timestamp))
     return output
 
 
-def _clean_vlan(location):
-    regex = re.search("vlan\d+", location)
-    if regex:
-        return regex.group()
-    sys.stderr.write(f"No vlan found in location {location}: invalid\n")
-    return None
+def _parse_pool_range(range_):
+    range_start, _, range_end = map(str.strip, range_.partition("-"))
+    return _escape_metric_name(range_start), _escape_metric_name(range_end)
+
+
+def _escape_metric_name(name):
+    name = ''.join([c if c in LEGAL_METRIC_CHARACTERS else "_" for c in name])
+    return name
 
 
 # send the data

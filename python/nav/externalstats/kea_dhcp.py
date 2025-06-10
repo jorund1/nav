@@ -32,7 +32,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
 from nav.errors import CommunicationError, ConfigurationError
-from nav.externalstats.defines import Pool, GraphiteMetric
+from nav.externalstats.dhcp import Pool, GraphiteMetric
 from nav.metrics.templates import metric_path_for_dhcp_pool
 
 
@@ -82,7 +82,7 @@ class Client:
 
         self._dhcp_config: Optional[dict] = None
         self._session: Optional[Session] = None
-        self._start_time: int = int(time.time())
+        self._start_time: float = time.time()
 
         if dhcp_version == 4:
             self._api_namings = (
@@ -118,7 +118,7 @@ class Client:
         start_time = time.time()
         local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
         start_time = start_time + local_tz_offset
-        self._start_time = int(start_time)
+        self._start_time = start_time
 
         pools = sorted(self._fetch_pools())
 

@@ -40,14 +40,15 @@ def main():
     """
     init_generic_logging(logfile=LOGFILE)
     config = getconfig(CONFIGFILE)
-    _ = parse_args()
+    parse_args()
     collect_metrics(config)
 
 
 def parse_args():
     """Builds an ArgumentParser and returns parsed program arguments"""
     # Include this mainly for --help option
-    parser = argparse.ArgumentParser(description=main.__doc__.strip())
+    description = (main.__doc__ or "").strip()
+    parser = argparse.ArgumentParser(description=description)
     return parser.parse_args()
 
 

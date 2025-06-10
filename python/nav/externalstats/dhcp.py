@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from IPy import IP
 
 
-GraphiteMetric = tuple[str, tuple[int, int]]
+GraphiteMetric = tuple[str, tuple[float, int]]
 
 
 @dataclass(order=True, frozen=True, kw_only=True)
