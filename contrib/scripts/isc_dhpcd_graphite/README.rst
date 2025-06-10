@@ -14,22 +14,22 @@ The script runs ``dhcpd_pool`` (full path given with -C) with the flag
 Building the prefix
 ===================
 
-The dotted-path that graphite uses to store data is controlled by the prefix
-argument to the script (-p), the optional location argument (-l) and what
-``dhcpd_pool`` returns as its ``location`` key.
+The dotted-path that graphite uses to store data for each pool is controlled by
+the prefix argument to the script (-p), the server-name argument to the script
+(-sn) and the name of the pool; if the pool is configured within a
+shared-network in the dhcpd-pools config-file, the name of the pool is the same
+as the name of the shared-network. Otherwise, the name of the pool is a
+concatenation of its start-address, a hyphen, and its end-address.
 
-The default prefix is "nav.dhcp".
+* The prefix (-p) defaults to "nav".
+* The server-name (-sn) defaults to the hostname of the machine running this script.
 
-If ``-p`` is "nav.bloviate", ``-l`` is not set and the ``location`` in the json
-is "vlan1" the resulting graphite path is ``nav.bloviate.vlan1``.
+If ``-p`` is "nav", ``-sn`` is not set and a pool is configured within a
+shared-network called "foo" in the dhcpd-pools config-file, the resulting
+graphite path that specifies the the pool's amount of assigned (leased-out)
+addresses is
+``nav.dhcp.pools.<local-hostname>.foo.<pool-start>.<pool-end>.assigned``.
 
-
-Assumptions about Location
---------------------------
-
-The script assumes that the value of the ``location``-key contains a vlan-name
-of the form "vlanNUMBER", regex ``vlan\d+``. If this is not the case, a warning
-is issued on stderr and that row of results is not passed on to graphite.
-
-The location-value is normalized so that a value of "Student vlan2 new" is sent
-to graphite as "vlan2".
+If the pool above were to be configured outside any shared-network in the
+dhcpd-pools config-file, the resulting graphite path would instead have been
+``nav.dhcp.pools.<local-hostname>.<pool-start>-<pool-end>.<pool-start>.<pool-end>.assigned``.

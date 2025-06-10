@@ -65,20 +65,16 @@ def parse_args():
     parser.add_argument(
         "-p",
         "--prefix",
-        help="Path prefix to use for the metric, overriding the default. Default: %(default)s",
+        help="Path prefix to use in created metric paths, overriding the default. Default: %(default)s",
         type=str,
         default=DEFAULT_PREFIX,
     )
-    # parser.add_argument(
-    #     "-l",
-    #     "--location",
-    #     help=(
-    #         "Location, if any, to append to the metric prefix to build the path."
-    #         ' If the vlan is named "vlan1" and the location is "building1.cellar"'
-    #         " the resulting metric path would be PREFIX.building1.cellar.vlan1"
-    #     ),
-    #     type=str,
-    # )
+    parser.add_argument(
+        "-sn",
+        "--server-name",
+        help="Server name to use in created metric paths. Default: Hostname of the machine running this script.",
+        type=str,
+    )
     protocol_choices = ("text",) + tuple(str(p) for p in PICKLE_PROTOCOL)
     parser.add_argument(
         "-P",
@@ -107,8 +103,8 @@ def parse_args():
         else:
             args.port = "2003"
     args.actual_prefix = args.prefix + ".dhcp.pools"
-    # if args.location:
-    #     args.actual_prefix += f".{args.location}"
+    if not args.location:
+        args.location = socket.gethostname() # TODO: Escape
     return args
 
 
