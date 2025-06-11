@@ -20,7 +20,6 @@ from functools import lru_cache
 import re
 
 from nav.models.manage import Netbox, Interface, Prefix, Sensor
-from nav.externalstats.dhcp import Pool
 
 __all__ = ['reverses', 'lookup']
 _reverse_handlers = []

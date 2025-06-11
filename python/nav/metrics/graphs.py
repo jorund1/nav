@@ -361,7 +361,7 @@ def flattened(fluffy):
     return flattenedes
 
 
-def sealed_series(*series: list[str] | str, name: str, **meta: str) -> list[str]:
+def completed_series(*series: list[str] | str, name: str, **meta: str) -> list[str]:
     tmpl = "alias({path}, '{name}')"
     if len(meta) > 0:
         name = ";;".join(f"{key}={val}" for key, val in meta.items()) + ";;" + name
@@ -383,15 +383,5 @@ def diffed_series(*series: list[str] | str) -> list[str]:
     return [tmpl.format(paths=",".join(flattened(series)))]
 
 
-def json_url(*series: list[str] | str, title: str) -> str:
+def json_series_url(*series: list[str] | str, title: str) -> str:
     return get_simple_graph_url(flattened(series), format="json", title=title)
-
-
-summed_series(["a"])
-
-sealed_series(
-    diffed_series("nav.total", summed_series("nav.a", "nav.b", "nav.c")),
-    name="abc",
-    renderer="area",
-)
-sealed_series(summed_series("nav.a"), name="abc", renderer="area")

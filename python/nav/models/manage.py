@@ -20,6 +20,7 @@
 # pylint: disable=R0903
 
 import base64
+from collections import defaultdict
 import datetime as dt
 import pickle
 from functools import partial
@@ -41,8 +42,8 @@ from django.urls import reverse
 from nav import util
 from nav.bitvector import BitVector
 from nav.metrics.data import get_netboxes_availability
-from nav.metrics.graphs import get_simple_graph_url, Graph
-from nav.metrics.names import get_all_leaves_below, get_metric_nonleaf_children
+from nav.metrics.graphs import diffed_series, get_simple_graph_url, Graph, completed_series, summed_series, json_series_url
+from nav.metrics.names import get_all_leaves_below, raw_metric_query
 from nav.metrics.templates import (
     metric_prefix_for_interface,
     metric_prefix_for_ports,
@@ -1538,13 +1539,12 @@ class Vlan(models.Model):
     def get_graph_url(self, family=4):
         """Creates a graph url for the given family with all prefixes stacked"""
         assert family in [4, 6]
-        from nav.metrics.graphs import sealed_series, summed_series, json_url
 
         prefixes = self.prefixes.extra(where=["family(netaddr)=%s" % family])
         # Put metainformation in the alias so that Rickshaw can pick it up and
         # know how to draw the series.
         series = [
-            sealed_series(
+            completed_series(
                 metric_path_for_prefix(prefix.net_address, 'ip_count'),
                 name=prefix.net_address,
                 renderer="area",
@@ -1560,96 +1560,87 @@ class Vlan(models.Model):
                 metric_path_for_prefix(prefix.net_address, 'ip_range')
                 for prefix in prefixes
             ]
-            series.append(sealed_series(summed_series(ip_ranges), name="Max addresses"))
+            series.append(completed_series(summed_series(ip_ranges), name="Max addresses"))
 
         title = f"Total IPv{family} addresses on vlan {str(self)} - stacked"
 
-        return json_url(*series, title=title)
+        return json_series_url(*series, title=title)
 
     def get_dhcp_graph_url(self, family=4):
         """Creates a graph url with dhcp stats for the given family"""
         assert family in [4]
+        pools = self.get_contained_dhcp_pools()
+        series = []
+        for (endpoint_name, pool_name), range_list in pools.items():
+            ranges_str = ",".join(f"{start}-{end}" for start, end in range_list)
+            pool_str = f"{endpoint_name} {pool_name}"
+            assigned = completed_series(
+                summed_series(f"nav.dhcp.pool.{endpoint_name}.{pool_name}.*.*.assigned"),
+                name=f"{pool_str} ({ranges_str}) assigned addresses",
+                renderer="area",
+            )
+            remaining = completed_series(
+                diffed_series(
+                    summed_series(f"nav.dhcp.pool.{endpoint_name}.{pool_name}.*.*.total"),
+                    summed_series(f"nav.dhcp.pool.{endpoint_name}.{pool_name}.*.*.assigned"),
+                ),
+                name=f"{pool_str}",
+                renderer="area",
+            )
+            series.append(assigned)
+            series.append(remaining)
 
-    #        from nav.metrics.graphs import sealed_series, summed_series, json_url
+        title = f"Total IPv{family} addresses on vlan {str(self)} - stacked"
 
-    #        pools = self.get_dhcp_pools()
+        return json_series_url(*series, title=title)
+
 
     def has_dhcp_stats(self):
         """Returns True if any DHCP statistic exists"""
-        return bool(self.get_dhcp_pools())
+        return bool(self.get_contained_dhcp_pools())
 
     # TODO: Cache
     # TODO: Do we need to assert that all vlan subnets stored in NAV are disjoint or must we check it here
     #      so as to avoid potential duplicate graphite subnets/pools in the return value?
-    def get_dhcp_pools(self) -> dict[IPy.IP, dict[IPy.IP, list[tuple[IPy.IP, IPy.IP]]]]:
+    def get_contained_dhcp_pools(self) -> dict[tuple[str, str], list[tuple[IPy.IP, IPy.IP]]]:
         """
         Fetches all subnets and their respective pools that are stored under
         'nav.dhcp.subnet.*.pools.*' in graphite and that are contained by some
         subnet of this vlan. The returned dict has the following structure:
 
-        {
-          <nav-prefix-1>: {
-            <contained-graphite-prefix-1>: [
-              <contained-graphite-pool-1>,
-              <contained-graphite-pool-2>,
-            ],
-            <contained-graphite-prefix-2>: [
-              <contained-graphite-pool-3>,
-              <contained-graphite-pool-4>,
-            ]
-          }
-          <nav-prefix-2>: {
-            ...
-          }
-          ...
-        }
         """
 
-        def unescape_prefix(escaped_prefix: str) -> IPy.IP:
+        def unescape_address(escaped_prefix: str) -> IPy.IP:
             parts = escaped_prefix.split("_")
-            return IPy.IP(".".join(parts[:4]) + "/" + str(parts[4]))
+            return IPy.IP(".".join(parts[:]))
 
-        def unescape_pool(escaped_pool: str) -> tuple[IPy.IP, IPy.IP]:
-            escaped_addrs = escaped_pool.split("-")
-            start_addr = IPy.IP(".".join(escaped_addrs[0].split("_")))
-            end_addr = IPy.IP(".".join(escaped_addrs[1].split("_")))
-            return (start_addr, end_addr)
-
-        # Prefixes stored in the nav database for this VLAN
-        our_prefixes = IPy.IPSet(
+        # Prefixes stored in the nav database for this VLAN (usually a singleton)
+        vlan_prefixes = IPy.IPSet(
             [
                 IPy.IP(prefix.net_address)
                 for prefix in self.prefixes.extra(where=["family(netaddr)=%s" % 4])
             ]
         )
-
-        if len(our_prefixes) == 0:
+        if len(vlan_prefixes) == 0:
             return {}
 
-        # Prefixes and pools stored in graphite
-        their_prefixes = [
-            (unescape_prefix(path.split(".")[-3]), unescape_pool(path.split(".")[-1]))
-            for path in get_metric_nonleaf_children("nav.dhcp.subnet.*.pools")
-        ]
-
-        if len(their_prefixes) == 0:
+        graphite_paths = [node["id"].split(".") for node in raw_metric_query("nav.dhcp.pool.*.*.*.*")]
+        if len(graphite_paths) == 0:
             return {}
 
-        # Prefixes stored in the nav database for this vlan
-        #   -> Prefixes stored in graphite that are contained by vlan prefix
-        #     -> Pools stored in graphite that are contained by graphite prefix
-        prefix_pools_map: dict[IPy.IP, dict[IPy.IP, list[tuple[IPy.IP, IPy.IP]]]] = {}
+        graphite_pools = defaultdict(list)
+        relevant_pools = set()
+        for path in graphite_paths:
+            range_start = unescape_address(path[5])
+            range_end = unescape_address(path[6])
+            endpoint_name = path[3]
+            pool_name = path[4]
+            graphite_pools[(endpoint_name, pool_name)].append((range_start, range_end))
 
-        for our_prefix in our_prefixes:
-            for their_prefix, their_pool in their_prefixes:
-                if their_prefix in our_prefix:
-                    their_prefix_pools_map = prefix_pools_map.setdefault(our_prefix, {})
-                    their_prefix_pools = their_prefix_pools_map.setdefault(
-                        their_prefix, []
-                    )
-                    their_prefix_pools.append(their_pool)
+            if range_start in vlan_prefixes or range_end in vlan_prefixes:
+                relevant_pools.add((endpoint_name, pool_name))
 
-        return prefix_pools_map
+        return {pool: graphite_pools[pool] for pool in relevant_pools}
 
 
 class NetType(models.Model):
