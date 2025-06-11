@@ -24,7 +24,7 @@ from itertools import chain
 import json
 import logging
 import time
-from typing import Optional, Iterator
+from typing import Optional, Iterator, NewType
 
 from IPy import IP
 from requests import RequestException, JSONDecodeError, Session
@@ -32,7 +32,6 @@ from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
 from nav.errors import CommunicationError, ConfigurationError
-from nav.externalstats.dhcp import Pool, GraphiteMetric
 from nav.metrics.templates import metric_path_for_dhcp_pool
 
 
@@ -40,10 +39,16 @@ _logger = logging.getLogger(__name__)
 
 
 @dataclass(order=True, frozen=True, kw_only=True)
-class KeaPool(Pool):
+class Pool:
     """A Kea DHCP configured address pool"""
+    name: str
+    range_start: IP
+    range_end: IP
     subnet_id: int
     pool_id: int
+
+
+GraphiteMetric = tuple[str, tuple[float, int]]
 
 
 class Client:
@@ -149,9 +154,9 @@ class Client:
         return stats
 
 
-    def _fetch_pools(self) -> Iterator[KeaPool]:
+    def _fetch_pools(self) -> Iterator[Pool]:
         """
-        Returns one _Pool instance per pool listed in the Kea DHCP server's
+        Returns one Pool instance per pool listed in the Kea DHCP server's
         configuration.
         """
         config = self._fetch_config()
@@ -167,7 +172,7 @@ class Client:
             yield from self._pools_of_subnet(subnet)
 
 
-    def _fetch_pool_stats(self, pool: KeaPool) -> Iterator[GraphiteMetric]:
+    def _fetch_pool_stats(self, pool: Pool) -> Iterator[GraphiteMetric]:
         for stat_name, api_naming in self._api_namings:
             value = self._fetch_pool_stat_value(pool, api_naming)
             if value is None:
@@ -334,7 +339,7 @@ class Client:
         return response
 
 
-    def _pools_of_subnet(self, subnet: dict) -> Iterator[KeaPool]:
+    def _pools_of_subnet(self, subnet: dict) -> Iterator[Pool]:
         """
         Returns one _Pool instance per pool configured for a subnet in a Kea
         DHCP server's configuration.
@@ -385,7 +390,7 @@ class Client:
                 )
                 continue
 
-            yield KeaPool(
+            yield Pool(
                 subnet_id=subnet_id,
                 pool_id=pool_id,
                 name=name,
@@ -478,6 +483,7 @@ class _KeaStatus(IntEnum):
     UNSUPPORTED = 2
     EMPTY = 3
     CONFLICT = 4
+
 
 def _raise_for_kea_status(status: int):
     """
