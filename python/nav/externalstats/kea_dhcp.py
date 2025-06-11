@@ -85,7 +85,7 @@ class Client:
         self._user_context_poolname_key: str = user_context_poolname_key
         self._timeout: float = timeout
 
-        self._dhcp_config: Optional[dict] = None
+        self._kea_config: Optional[dict] = None
         self._session: Optional[Session] = None
         self._start_time: float = time.time()
 
@@ -119,62 +119,53 @@ class Client:
         call will cause a subclass of nav.errors.CommunicationError to be raised.
         """
         self._session = self._create_session()
-        #TODO: remove local time stuff
-        start_time = time.time()
-        local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
-        start_time = start_time + local_tz_offset
-        self._start_time = start_time
 
-        pools = sorted(self._fetch_pools())
+        #TODO REMOVE USE OF local_tz_offset
+        local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
+        self._start_time = time.time() + local_tz_offset
+
+        pools = list(self._fetch_kea_pools())
 
         stats = []
         for pool in pools:
             stats.extend(self._fetch_pool_stats(pool))
 
-        maybe_updated_pools = sorted(self._fetch_pools())
-        if pools != maybe_updated_pools:
-            _logger.warning(
-                "The DHCP server's address pool configuration was modified while stats "
-                "were being fetched. This may cause stats collected during this run to "
-                "be associated with wrong address pool."
-            )
+        maybe_updated_pools = list(self._fetch_kea_pools())
+
+        self._log_pool_consistency(pools, maybe_updated_pools)
+        self._log_runtime(
+            self._start_time,
+            time.time() + local_tz_offset,
+            n_stats=len(stats),
+            n_pools=len(pools)
+        )
 
         self._session.close()
         self._session = None
-        end_time = time.time()
-        local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
-        end_time = end_time + local_tz_offset
-        _logger.info(
-            "Fetched %d stats(s) from %d pool(s) in %.2f seconds from %s",
-            len(stats),
-            len(pools),
-            end_time - start_time,
-            self._url,
-        )
         return stats
 
 
-    def _fetch_pools(self) -> Iterator[Pool]:
+    def _fetch_kea_pools(self) -> Iterator[Pool]:
         """
         Returns one Pool instance per pool listed in the Kea DHCP server's
         configuration.
         """
-        config = self._fetch_config()
+        config = self._fetch_kea_config()
         subnetkey = f"subnet{self._dhcp_version}"
 
-        for subnet in chain.from_iterable(
-            [config.get(subnetkey, [])]
-            + [
-                network.get(subnetkey, [])
-                for network in config.get("shared-networks", [])
-            ]
-        ):
+        standalone_subnets = config.get(subnetkey, [])
+        shared_network_subnets = chain.from_iterable(
+            shared_network_config.get(subnetkey, [])
+            for shared_network_config in config.get("shared-networks", [])
+        )
+
+        for subnet in chain(standalone_subnets, shared_network_subnets):
             yield from self._pools_of_subnet(subnet)
 
 
     def _fetch_pool_stats(self, pool: Pool) -> Iterator[GraphiteMetric]:
-        for stat_name, api_naming in self._api_namings:
-            value = self._fetch_pool_stat_value(pool, api_naming)
+        for nav_stat_name, api_stat_name in self._api_namings:
+            value = self._fetch_pool_stat_value(pool, api_stat_name)
             if value is None:
                 continue
             path = metric_path_for_dhcp_pool(
@@ -182,13 +173,13 @@ class Client:
                 pool.name,
                 pool.range_start,
                 pool.range_end,
-                stat_name
+                nav_stat_name
             )
             yield (path, (self._start_time, value))
 
 
     def _fetch_pool_stat_value(
-        self, pool: KeaPool, api_stat_name: str
+        self, pool: Pool, api_stat_name: str
     ) -> Optional[int]:
         """
         Return the most recent stat value recorded by the Kea DHCP server for
@@ -221,27 +212,24 @@ class Client:
         return value
 
 
-    def _fetch_config(self) -> dict:
+    def _fetch_kea_config(self) -> dict:
         """
-        Returns the current config of the Kea DHCP server that the Kea
+        Returns the current configuration of the Kea DHCP server that the Kea
         API serves.
         """
         if (
-            self._dhcp_config is None
-            or (dhcp_confighash := self._dhcp_config.get("hash", None)) is None
-            or self._fetch_config_hash() != dhcp_confighash
+            self._kea_config is None
+            or (kea_config_hash := self._kea_config.get("hash", None)) is None
+            or self._fetch_kea_config_hash() != kea_config_hash
         ):
             response = self._send_query("config-get")
-            try:
-                self._dhcp_config = response["arguments"][f"Dhcp{self._dhcp_version}"]
-            except KeyError as err:
-                raise KeaUnexpected(
-                    "Unrecognizable response to a 'config-get' request"
-                ) from err
-        return self._dhcp_config or {}
+            self._kea_config = response.get("arguments", {}).get(f"Dhcp{self._dhcp_version}", None)
+            if not isinstance(self._kea_config, dict):
+                raise KeaUnexpected("Unrecognizable response to a 'config-get' request")
+        return self._kea_config
 
 
-    def _fetch_config_hash(self) -> Optional[str]:
+    def _fetch_kea_config_hash(self) -> Optional[str]:
         """
         Returns the hash of the current config of the Kea DHCP server
         that the Kea API serves.
@@ -367,9 +355,6 @@ class Client:
                     )
                     continue
 
-            name = pool.get("user-context", {}).get(self._user_context_poolname_key, None)
-            name = name if isinstance(name, str) else ""
-
             try:
                 if "-" in pool_range:
                     # x.x.x.x - x.x.x.x
@@ -389,6 +374,9 @@ class Client:
                     pool_range,
                 )
                 continue
+
+            name = pool.get("user-context", {}).get(self._user_context_poolname_key, None)
+            name = name or f"pool-{range_start.strNormal()}-{range_end.strNormal()}"
 
             yield Pool(
                 subnet_id=subnet_id,
@@ -450,6 +438,25 @@ class Client:
             _logger.debug("Not using client certificate authentication")
 
         return session
+
+
+    def _log_pool_consistency(self, used_pools: list, maybe_updated_pools: list):
+        if sorted(used_pools) != sorted(maybe_updated_pools):
+            _logger.warning(
+                "The DHCP server's address pool configuration was modified while stats "
+                "were being fetched. This may cause stats collected during this run to "
+                "be associated with wrong address pool."
+            )
+
+
+    def _log_runtime(self, start_time: float, end_time: float, n_stats: int, n_pools: int):
+        _logger.info(
+            "Fetched %d stats(s) from %d pool(s) in %.2f seconds from %s",
+            n_stats,
+            n_pools,
+            end_time - start_time,
+            self._url,
+        )
 
 
 class KeaUnexpected(CommunicationError):
