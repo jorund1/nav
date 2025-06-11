@@ -11,6 +11,9 @@ from requests.exceptions import JSONDecodeError
 from typing import Callable
 from datetime import datetime, timedelta
 
+ENDPOINT_IDENTIFIER = "dhcp-server-foo"
+
+#TODO: Test when variying 'user_context_poolname_key'
 
 class TestRecognizableAPIResponses:
     """
@@ -28,7 +31,7 @@ class TestRecognizableAPIResponses:
 
         config, statistics, expected_stats = valid_dhcp4
         response_queue.autofill("dhcp4", config=config, statistics=statistics)
-        client = Client("foo", "http://example.org/")
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
 
         actual_stats = client.fetch_stats()
 
@@ -53,7 +56,7 @@ class TestRecognizableAPIResponses:
 
         config, statistics, expected_stats = valid_dhcp4
         response_queue.autofill("dhcp4", config=config, statistics=statistics)
-        client = Client("foo", "http://example.org/")
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
 
         actual_stats = client.fetch_stats()
         assert len(actual_stats) > 0
@@ -80,7 +83,7 @@ class TestRecognizableAPIResponses:
             "config-get",
             lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}})
         )
-        client = Client("foo", "http://example.org/")
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
         assert list(client.fetch_stats()) == []
 
 
@@ -101,7 +104,7 @@ class TestRecognizableAPIResponses:
                 {kea_arguments["name"]: []},
             ),
         )
-        client = Client("foo", "http://example.org/")
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
         assert list(client.fetch_stats()) == []
 
 
@@ -130,7 +133,7 @@ class TestRecognizableAPIResponses:
             "statistic-get",
             lambda kea_arguments, kea_service: make_api_response({})
         )
-        client = Client("foo", "http://example.org/")
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
         assert list(client.fetch_stats()) == []
 
 
@@ -151,7 +154,7 @@ class TestRecognizableAPIResponses:
             attrs={"status_code": http_status},
         )
 
-        client = Client("foo", "http://example.org/")
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
 
         with pytest.raises(CommunicationError):
             client.fetch_stats()
@@ -173,7 +176,7 @@ class TestRecognizableAPIResponses:
             "config-get",
             lambda kea_arguments, kea_service: make_api_response(config, status=kea_status)
         )
-        client = Client("foo", "http://example.org/")
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
         with pytest.raises(CommunicationError):
             client.fetch_stats()
 
@@ -194,7 +197,7 @@ class TestRecognizableAPIResponses:
             "statistic-get",
             lambda kea_arguments, kea_service: make_api_response(statistics, status=status),
         )
-        client = Client("foo", "http://example.org/")
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
         with pytest.raises(CommunicationError):
             client.fetch_stats()
 
@@ -217,7 +220,7 @@ class TestRecognizableAPIResponses:
         """
         foohash = "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"
         config, statistics, _ = valid_dhcp4
-        client = Client("foo", "http://example.org/")
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
         config["Dhcp4"]["hash"] = foohash
         response_queue.autofill("dhcp4", config=config, statistics=statistics)
         response_queue.add(
@@ -238,7 +241,7 @@ class TestUnrecognizableAPIResponses:
         self, valid_dhcp4, response_queue, invalid_response
     ):
         config, statistics, _ = valid_dhcp4
-        client = Client("foo", "http://example.org/")
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
 
         response_queue.autofill("dhcp4", config=None, statistics=statistics)
         response_queue.add("config-get", invalid_response)
@@ -249,7 +252,7 @@ class TestUnrecognizableAPIResponses:
         self, valid_dhcp4, response_queue, invalid_response
     ):
         config, statistics, _ = valid_dhcp4
-        client = Client("foo", "http://example.org/")
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
 
         response_queue.autofill("dhcp4", config=config, statistics=None)
         response_queue.add("statistic-get", invalid_response)
@@ -260,7 +263,7 @@ class TestUnrecognizableAPIResponses:
         self, valid_dhcp4, response_queue, invalid_response
     ):
         config, statistics, _ = valid_dhcp4
-        client = Client("foo", "http://example.org/")
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
         config["Dhcp4"]["hash"] = "foo"
         response_queue.autofill("dhcp4", config=config, statistics=statistics)
         response_queue.add("config-hash-get", invalid_response)
@@ -270,11 +273,11 @@ class TestUnrecognizableAPIResponses:
 
 class TestConfigCaching:
     """
-    Checks that the '_fetch_config()' method doesn't request the DHCP
+    Checks that the '_fetch_kea_config()' method doesn't request the DHCP
     configuration from the Kea Management API more often than necessary.
     """
 
-    def test_fetch_config_should_not_refetch_config_if_its_hash_is_unchanged(
+    def test_fetch_kea_config_should_not_refetch_config_if_its_hash_is_unchanged(
             self, response_queue
     ):
         response_queue.add(
@@ -286,14 +289,14 @@ class TestConfigCaching:
             lambda kea_arguments, kea_service: make_api_response({"hash": "1"}),
         )
 
-        client = Client("foo", "http://example.org/")
-        client._fetch_config()
-        client._fetch_config()
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
+        client._fetch_kea_config()
+        client._fetch_kea_config()
 
         assert len(response_queue.requests["config-get"]) == 1
 
 
-    def test_fetch_config_should_refetch_config_if_its_hash_is_changed(
+    def test_fetch_kea_config_should_refetch_config_if_its_hash_is_changed(
             self, response_queue
     ):
         response_queue.add(
@@ -305,14 +308,14 @@ class TestConfigCaching:
             lambda kea_arguments, kea_service: make_api_response({"hash": "2"}),
         )
 
-        client = Client("foo", "http://example.org/")
-        client._fetch_config()
-        client._fetch_config()
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
+        client._fetch_kea_config()
+        client._fetch_kea_config()
 
         assert len(response_queue.requests["config-get"]) == 2
 
 
-    def test_fetch_config_should_refetch_config_if_its_hash_is_missing(
+    def test_fetch_kea_config_should_refetch_config_if_its_hash_is_missing(
             self, response_queue
     ):
         response_queue.add(
@@ -324,14 +327,14 @@ class TestConfigCaching:
             lambda kea_arguments, kea_service: make_api_response({"hash": "1"}),
         )
 
-        client = Client("foo", "http://example.org/")
-        client._fetch_config()
-        client._fetch_config()
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
+        client._fetch_kea_config()
+        client._fetch_kea_config()
 
         assert len(response_queue.requests["config-get"]) == 2
 
 
-    def test_fetch_config_should_refetch_config_if_config_hash_is_unsupported(
+    def test_fetch_kea_config_should_refetch_config_if_config_hash_is_unsupported(
             self, response_queue
     ):
         response_queue.add(
@@ -339,9 +342,9 @@ class TestConfigCaching:
             lambda kea_arguments, kea_service: make_api_response({"Dhcp4": {}, "hash": "1"}),
         )
 
-        client = Client("foo", "http://example.org/")
-        client._fetch_config()
-        client._fetch_config()
+        client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
+        client._fetch_kea_config()
+        client._fetch_kea_config()
 
         assert len(response_queue.requests["config-get"]) == 2
 
@@ -350,7 +353,7 @@ def test_fetch_stats_should_check_and_warn_if_server_config_changed_during_call(
         valid_dhcp4, response_queue, caplog
 ):
     config, statistics, _ = valid_dhcp4
-    client = Client("foo", "http://example.org/")
+    client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
     response_queue.autofill("dhcp4", config=None, statistics=statistics)
     response_queue.add("config-get", make_api_response(config))
     updated_config = deepcopy(config)
@@ -374,7 +377,7 @@ def test_fetch_stats_should_warn_if_using_http(
     from the Kea API may contain sensitive data such as passwords in plaintext.
     """
     config, statistics, _ = valid_dhcp4
-    client = Client("foo", "http://example.org/")
+    client = Client(ENDPOINT_IDENTIFIER, "http://example.org/")
     response_queue.autofill("dhcp4", config=config, statistics=statistics)
 
     with caplog.at_level(logging.WARNING):
@@ -392,7 +395,7 @@ def test_fetch_stats_should_warn_if_using_http_basic_auth_with_http(
     plaintext from client to server.
     """
     config, statistics, _ = valid_dhcp4
-    client = Client("foo", "http://example.org/", http_basic_username="nav", http_basic_password="nav")
+    client = Client(ENDPOINT_IDENTIFIER, "http://example.org/", http_basic_username="nav", http_basic_password="nav")
     response_queue.autofill("dhcp4", config=config, statistics=statistics)
 
     with caplog.at_level(logging.WARNING):
@@ -411,7 +414,7 @@ def test_fetch_stats_should_error_if_using_client_certificate_with_http(
     certificates or both.
     """
     config, statistics, _ = valid_dhcp4
-    client = Client("foo", "http://example.org/", client_cert_path="/bar/baz.pem")
+    client = Client(ENDPOINT_IDENTIFIER, "http://example.org/", client_cert_path="/bar/baz.pem")
     response_queue.autofill("dhcp4", config=config, statistics=statistics)
 
     with pytest.raises(ConfigurationError):
@@ -429,7 +432,7 @@ def test_fetch_stats_should_use_http_basic_auth_when_this_is_configured(
     """
     config, statistics, _ = valid_dhcp4
     client = Client(
-        "foo",
+        ENDPOINT_IDENTIFIER,
         "http://example.org/",
         http_basic_username="bar",
         http_basic_password="baz",
@@ -460,7 +463,7 @@ def test_fetch_stats_should_use_client_certificates_when_this_is_configured(
     """
     config, statistics, _ = valid_dhcp4
     client = Client(
-        "foo",
+        ENDPOINT_IDENTIFIER,
         "https://example.org/",
         client_cert_path="/bar/baz.pem",
     )
@@ -540,9 +543,6 @@ def valid_dhcp4():
                                     "option-data": [],
                                     "pool": "42.0.5.1-42.0.5.5",
                                     "pool-id": 1,
-                                    "user-context": {
-                                        "name": "stavanger-staff",
-                                    },
                                 },
                             ],
                             "subnet": "42.0.5.0/24",
@@ -659,33 +659,33 @@ def valid_dhcp4():
     # stat we expect to get for each stat type and pool after processing
     # the api response.
     expected_stats = [
-        ("nav.dhcp.pool.bergen-staff.42_0_1_1.42_0_1_10.assigned", ("2025-05-30 05:49:49.467993", 2)),
-        ("nav.dhcp.pool.bergen-staff.42_0_1_1.42_0_1_10.declined", ("2025-05-30 05:49:49.467993", 1)),
-        ("nav.dhcp.pool.bergen-staff.42_0_1_1.42_0_1_10.total", ("2025-05-30 05:49:49.467993", 10)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.bergen-staff.42_0_1_1.42_0_1_10.assigned", ("2025-05-30 05:49:49.467993", 2)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.bergen-staff.42_0_1_1.42_0_1_10.declined", ("2025-05-30 05:49:49.467993", 1)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.bergen-staff.42_0_1_1.42_0_1_10.total", ("2025-05-30 05:49:49.467993", 10)),
 
-        ("nav.dhcp.pool.bergen-student.42_0_2_1.42_0_2_10.assigned", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pool.bergen-student.42_0_2_1.42_0_2_10.declined", ("2025-05-30 05:49:49.467993", 1)),
-        ("nav.dhcp.pool.bergen-student.42_0_2_1.42_0_2_10.total", ("2025-05-30 05:49:49.467993", 10)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.bergen-student.42_0_2_1.42_0_2_10.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.bergen-student.42_0_2_1.42_0_2_10.declined", ("2025-05-30 05:49:49.467993", 1)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.bergen-student.42_0_2_1.42_0_2_10.total", ("2025-05-30 05:49:49.467993", 10)),
 
-        ("nav.dhcp.pool.bergen-student.42_0_2_128.42_0_2_255.assigned", ("2025-05-30 05:49:49.467993", 1)),
-        ("nav.dhcp.pool.bergen-student.42_0_2_128.42_0_2_255.declined", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pool.bergen-student.42_0_2_128.42_0_2_255.total", ("2025-05-30 05:49:49.467993", 128)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.bergen-student.42_0_2_128.42_0_2_255.assigned", ("2025-05-30 05:49:49.467993", 1)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.bergen-student.42_0_2_128.42_0_2_255.declined", ("2025-05-30 05:49:49.467993", 0)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.bergen-student.42_0_2_128.42_0_2_255.total", ("2025-05-30 05:49:49.467993", 128)),
 
-        ("nav.dhcp.pool.bergen-student.42_0_2_32.42_0_2_47.assigned", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pool.bergen-student.42_0_2_32.42_0_2_47.declined", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pool.bergen-student.42_0_2_32.42_0_2_47.total", ("2025-05-30 05:49:49.467993", 16)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.bergen-student.42_0_2_32.42_0_2_47.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.bergen-student.42_0_2_32.42_0_2_47.declined", ("2025-05-30 05:49:49.467993", 0)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.bergen-student.42_0_2_32.42_0_2_47.total", ("2025-05-30 05:49:49.467993", 16)),
 
-        ("nav.dhcp.pool.oslo-student.42_0_3_1.42_0_3_10.assigned", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pool.oslo-student.42_0_3_1.42_0_3_10.declined", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pool.oslo-student.42_0_3_1.42_0_3_10.total", ("2025-05-30 05:49:49.467993", 10)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.oslo-student.42_0_3_1.42_0_3_10.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.oslo-student.42_0_3_1.42_0_3_10.declined", ("2025-05-30 05:49:49.467993", 0)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.oslo-student.42_0_3_1.42_0_3_10.total", ("2025-05-30 05:49:49.467993", 10)),
 
-        ("nav.dhcp.pool.oslo-staff.42_0_4_1.42_0_4_5.assigned", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pool.oslo-staff.42_0_4_1.42_0_4_5.declined", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pool.oslo-staff.42_0_4_1.42_0_4_5.total", ("2025-05-30 05:49:49.467993", 5)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.oslo-staff.42_0_4_1.42_0_4_5.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.oslo-staff.42_0_4_1.42_0_4_5.declined", ("2025-05-30 05:49:49.467993", 0)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.oslo-staff.42_0_4_1.42_0_4_5.total", ("2025-05-30 05:49:49.467993", 5)),
 
-        ("nav.dhcp.pool.stavanger-staff.42_0_5_1.42_0_5_5.assigned", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pool.stavanger-staff.42_0_5_1.42_0_5_5.declined", ("2025-05-30 05:49:49.467993", 0)),
-        ("nav.dhcp.pool.stavanger-staff.42_0_5_1.42_0_5_5.total", ("2025-05-30 05:49:49.467993", 5)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.pool-42_0_5_1-42_0_5_5.42_0_5_1.42_0_5_5.assigned", ("2025-05-30 05:49:49.467993", 0)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.pool-42_0_5_1-42_0_5_5.42_0_5_1.42_0_5_5.declined", ("2025-05-30 05:49:49.467993", 0)),
+        (f"nav.dhcp.pool.{ENDPOINT_IDENTIFIER}.pool-42_0_5_1-42_0_5_5.42_0_5_1.42_0_5_5.total", ("2025-05-30 05:49:49.467993", 5)),
     ]
 
     return config, statistics, expected_stats
