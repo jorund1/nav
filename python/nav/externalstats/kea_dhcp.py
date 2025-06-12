@@ -280,20 +280,18 @@ class Client:
                 headers={"Content-Type": "application/json"},
             )
             _logger.debug(
-                "%s responded with 'HTTP %s: %s' to command '%s'",
+                "HTTP response status to command '%s' from %s was 'HTTP %s: %s'",
+                command,
                 self._url,
                 responses.status_code,
                 responses.reason,
-                command,
             )
             responses.raise_for_status()
             responses = responses.json()
         except JSONDecodeError as err:
             raise KeaUnexpected(
-                "%s does not look like a Kea API endpoint; "
-                "response to command '%s' was not valid JSON",
-                self._url,
-                command,
+                f"{self._url} does not look like a Kea API endpoint; "
+                f"response to command {command} was not valid JSON",
             ) from err
         except RequestException as err:
             raise CommunicationError from err
@@ -309,17 +307,16 @@ class Client:
                 raise KeaUnexpected(f"{status}: {message}")
             case _:
                 raise KeaUnexpected(
-                    "%s does not look like a Kea API; "
+                    f"{self._url} does not look like a Kea API; "
                     "response JSON structured in an unknown way",
-                    self._url,
                 )
 
         _logger.debug(
-            "Response from %s to command '%s' was '%s: %s'",
-            self._url,
+            "API response status to command '%s' from %s was 'Kea %s: %s'",
             command,
+            self._url,
             status,
-            response.get("text", "(no description)")
+            response.get("text", _KeaStatus.describe(status))
         )
 
         _raise_for_kea_status(status)
@@ -336,7 +333,7 @@ class Client:
             case {"id": int(subnet_id)}:
                 pass
             case _:
-                _logger.debug(
+                _logger.info(
                     "Misconfigured subnet from %s, skipping...",
                     self._url,
                 )
@@ -347,7 +344,7 @@ class Client:
                 case {"pool-id": int(pool_id), "pool": str(pool_range)}:
                     pass
                 case _:
-                    _logger.debug(
+                    _logger.info(
                         'Misconfigured pool for subnet with id %d from %s, skipping... '
                         '(make sure every pool has "pool-id" and "pool" configured)',
                         subnet_id,
@@ -367,7 +364,7 @@ class Client:
                     range_start = IP(ip[0])
                     range_end = IP(ip[-1])
             except ValueError:
-                _logger.debug(
+                _logger.info(
                     "Pool range in pool with id %d from %s configured with unknown format '%s', skipping...",
                     pool_id,
                     self._url,
@@ -490,6 +487,15 @@ class _KeaStatus(IntEnum):
     UNSUPPORTED = 2
     EMPTY = 3
     CONFLICT = 4
+
+    @classmethod
+    def describe(cls, status: int) -> str:
+        try:
+            return cls(status).name
+        except ValueError:
+            return "(status has no description)"
+
+
 
 
 def _raise_for_kea_status(status: int):
