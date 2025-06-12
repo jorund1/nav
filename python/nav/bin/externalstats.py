@@ -28,7 +28,7 @@ _logger = logging.getLogger("nav.externalstats")
 LOGFILE = "externalstats.log"
 CONFIGFILE = "externalstats.conf"
 
-FETCHERS = {
+ENDPOINT_CLIENTS = {
     "kea-dhcp4": partial(kea_dhcp.Client, dhcp_version=4),
 }
 
@@ -64,14 +64,28 @@ def collect_metrics(config):
 
     # TODO: Multithread
     stats = []
-    for name, options in config.items():
-        if not name.startswith("endpoint_"):
+    for section, options in config.items():
+        if not section.startswith("endpoint_"):
             continue
-        type = options.get("type")
+        endpoint_name = section.removeprefix("endpoint_")
+        endpoint_type = options.get("type")
         kwargs = {opt: val for opt, val in options.items() if opt != "type"}
-        cls = FETCHERS[type]
-        fetcher = cls(**kwargs)
-        stats.extend(fetcher.fetch_stats())
+        try:
+            cls = ENDPOINT_CLIENTS[endpoint_type]
+        except KeyError:
+            _logger.warning(
+                "Invalid endpoint type '%s' defined in config section [%s], skipping...",
+                endpoint_type,
+                section,
+            )
+            continue
+        _logger.info(
+            "Collecting stats from endpoint '%s' of type '%s'",
+            endpoint_name,
+            endpoint_type
+        )
+        client = cls(endpoint_name, **kwargs)
+        stats.extend(client.fetch_stats())
 
     carbon.send_metrics(stats)
 
