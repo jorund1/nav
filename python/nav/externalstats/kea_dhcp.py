@@ -461,21 +461,21 @@ class KeaUnexpected(CommunicationError):
 
 
 class KeaError(CommunicationError):
-    """(API specific) Kea failed during command processing"""
+    """Kea API failed during command processing"""
 
 
 class KeaUnsupported(CommunicationError):
-    """(API specific) Unsupported command"""
+    """Command not supported by Kea API"""
 
 
 class KeaEmpty(CommunicationError):
-    """(API specific) Requested resource not found"""
+    """Requested resource not found by Kea API"""
 
 
 class KeaConflict(CommunicationError):
     """
-    (API specific) Kea failed to apply requested changes due to conflicts with
-    its server state
+    Kea API failed to apply requested changes due to conflicts with
+    its internal state
     """
 
 
@@ -494,8 +494,6 @@ class _KeaStatus(IntEnum):
             return cls(status).name
         except ValueError:
             return "(status has no description)"
-
-
 
 
 def _raise_for_kea_status(status: int):

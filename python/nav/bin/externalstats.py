@@ -14,12 +14,17 @@
 # details.  You should have received a copy of the GNU General Public License
 # along with NAV. If not, see <http://www.gnu.org/licenses/>.
 #
+"""
+Collects statistics from endpoints not expected to be part of the network
+managed by NAV
+"""
 
 import argparse
 import logging
 from functools import partial
 
 from nav.config import getconfig
+from nav.errors import CommunicationError
 from nav.externalstats import kea_dhcp
 from nav.logs import init_generic_logging
 from nav.metrics import carbon
@@ -34,33 +39,35 @@ ENDPOINT_CLIENTS = {
 
 
 def main():
-    """
-    Collects current metrics from each endpoint configured in
-    'CONFDIR/externalstats.log' and sends them to graphite
-    """
+    """Start collecting statistics"""
     init_generic_logging(logfile=LOGFILE)
     config = getconfig(CONFIGFILE)
     parse_args()
-    collect_metrics(config)
+    collect_stats(config)
 
 
 def parse_args():
     """Builds an ArgumentParser and returns parsed program arguments"""
-    # Include this mainly for --help option
-    description = (main.__doc__ or "").strip()
-    parser = argparse.ArgumentParser(description=description)
+    # Parse arguments mainly to support the --help option
+    parser = argparse.ArgumentParser(
+        description="Collects statistics from endpoints not expected to be part of the "
+        "network managed by NAV",
+        epilog="Statistics are collected from each endpoint configured in "
+        "'CONFDIR/externalstats.conf', and then sent to the carbon backend configured in "
+        "'CONFDIR/graphite.conf'.",
+    )
     return parser.parse_args()
 
 
-def collect_metrics(config):
+def collect_stats(config):
     """
-    Collects current metrics from each configured endpoint
+    Collects current stats from each configured endpoint
 
     :param config: parsed INI configuration of endpoints to collect metrics
     from
     """
 
-    _logger.info("--> Starting metric collection <--")
+    _logger.info("--> Starting stats collection <--")
 
     # TODO: Multithread
     stats = []
@@ -85,11 +92,19 @@ def collect_metrics(config):
             endpoint_type
         )
         client = cls(endpoint_name, **kwargs)
-        stats.extend(client.fetch_stats())
+        try:
+            stats.extend(client.fetch_stats())
+        except CommunicationError as err:
+            _logger.info(
+                "Error while collecting stats from endpoint '%s' of type '%s': %s",
+                endpoint_name,
+                endpoint_type,
+                str(err),
+            )
 
     carbon.send_metrics(stats)
 
-    _logger.info("--> Metric collection done <--")
+    _logger.info("--> Stats collection done <--")
 
 
 if __name__ == "__main__":
