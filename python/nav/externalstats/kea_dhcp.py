@@ -130,11 +130,11 @@ class Client:
 
         stats = []
         for pool in pools:
-            stats.extend(self._fetch_pool_stats(pool))
+            stats.extend(self._fetch_kea_pool_stats(pool))
 
         maybe_updated_pools = list(self._fetch_kea_pools())
 
-        self._log_pool_consistency(pools, maybe_updated_pools)
+        self._log_kea_pool_consistency(pools, maybe_updated_pools)
         self._log_runtime(
             self._start_time,
             time.time() + local_tz_offset,
@@ -165,9 +165,9 @@ class Client:
             yield from self._pools_of_kea_subnet(subnet)
 
 
-    def _fetch_pool_stats(self, pool: Pool) -> Iterator[GraphiteMetric]:
+    def _fetch_kea_pool_stats(self, pool: Pool) -> Iterator[GraphiteMetric]:
         for nav_stat_name, api_stat_name in self._api_namings:
-            value = self._fetch_pool_stat_value(pool, api_stat_name)
+            value = self._fetch_kea_pool_stat_value(pool, api_stat_name)
             if value is None:
                 continue
             path = metric_path_for_dhcp_pool(
@@ -180,7 +180,7 @@ class Client:
             yield (path, (self._start_time, value))
 
 
-    def _fetch_pool_stat_value(
+    def _fetch_kea_pool_stat_value(
         self, pool: Pool, api_stat_name: str
     ) -> Optional[int]:
         """
@@ -455,7 +455,7 @@ class Client:
         return session
 
 
-    def _log_pool_consistency(self, used_pools: list, maybe_updated_pools: list):
+    def _log_kea_pool_consistency(self, used_pools: list, maybe_updated_pools: list):
         if sorted(used_pools) != sorted(maybe_updated_pools):
             _logger.warning(
                 "The DHCP server's address pool configuration was modified while stats "
