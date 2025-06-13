@@ -42,11 +42,12 @@ _logger = logging.getLogger(__name__)
 @dataclass(order=True, frozen=True, kw_only=True)
 class Pool:
     """A Kea DHCP configured address pool"""
+    subnet_id: int
+    pool_id: int
+
     name: str
     range_start: IP
     range_end: IP
-    subnet_id: int
-    pool_id: int
 
 
 GraphiteMetric = tuple[str, tuple[float, int]]
@@ -74,7 +75,7 @@ class Client:
         client_cert_path: str = "",
         client_cert_key_path: str = "",
         user_context_poolname_key: str = "name",
-        timeout: int = 5,
+        timeout: float = 5.0,
     ):
         self._name: str = name
         self._url: str = url
@@ -117,7 +118,7 @@ class Client:
         If the Kea API responds with an empty response to one or more of the
         requests for some stat(s), these stats will be missing in the returned
         list, but a list is still succesfully returned. Other errors during this
-        call will cause a subclass of nav.errors.CommunicationError to be raised.
+        call will cause a subclass of nav.errors.externalstats.CommunicationError to be raised.
         """
         self._session = self._create_session()
 
@@ -161,7 +162,7 @@ class Client:
         )
 
         for subnet in chain(standalone_subnets, shared_network_subnets):
-            yield from self._pools_of_subnet(subnet)
+            yield from self._pools_of_kea_subnet(subnet)
 
 
     def _fetch_pool_stats(self, pool: Pool) -> Iterator[GraphiteMetric]:
@@ -209,7 +210,7 @@ class Client:
 
         # The reference API consumer assumes the first sample is the most recent
         # See https://gitlab.isc.org/isc-projects/stork/-/blob/4193375c01e3ec0b3d862166e2329d76e686d16d/backend/server/apps/kea/rps.go#L223-227
-        value, timestring = samples[0]
+        value, _timestring = samples[0]
         return value
 
 
@@ -325,64 +326,80 @@ class Client:
         return response
 
 
-    def _pools_of_subnet(self, subnet: dict) -> Iterator[Pool]:
+    def _pools_of_kea_subnet(self, subnet: dict) -> Iterator[Pool]:
         """
-        Returns one _Pool instance per pool configured for a subnet in a Kea
+        Returns one Pool instance per pool configured for a subnet in a Kea
         DHCP server's configuration.
         """
-        match subnet:
-            case {"id": int(subnet_id)}:
-                pass
-            case _:
-                _logger.info(
-                    "Misconfigured subnet from %s, skipping...",
-                    self._url,
-                )
-                return
+        try:
+            subnet_id = int(subnet["id"])
+        except (KeyError, TypeError, ValueError):
+            _logger.info(
+                "Misconfigured subnet from %s, skipping...",
+                self._url,
+            )
+            return
 
         for pool in subnet.get("pools", []):
-            match pool:
-                case {"pool-id": int(pool_id), "pool": str(pool_range)}:
-                    pass
-                case _:
+            try:
+                pool_id = int(pool["pool-id"])
+                pool_start, pool_end = self._parse_kea_pool_range(pool["pool"])
+
+                pool_name_key = self._user_context_poolname_key
+                pool_name = pool.get("user-context", {}).get(pool_name_key, None)
+                if not isinstance(pool_name, str):
+                    pool_name = f"pool-{pool_start.strNormal()}-{pool_end.strNormal()}"
                     _logger.info(
-                        'Misconfigured pool for subnet with id %d from %s, skipping... '
-                        '(make sure every pool has "pool-id" and "pool" configured)',
+                        'Did not find a pool name when looking up "%s" in "user-context" '
+                        'of pool with pool-id %d and subnet-id %d in configuration '
+                        'obtained from Kea API at %s, defaulting to name "%s"... ',
+                        pool_name_key,
+                        pool_id,
                         subnet_id,
                         self._url,
+                        pool_name,
                     )
-                    continue
 
-            try:
-                if "-" in pool_range:
-                    # x.x.x.x - x.x.x.x
-                    range_start, _, range_end = pool_range.partition("-")
-                    range_start = IP(range_start.strip())
-                    range_end = IP(range_end.strip())
-                else:
-                    # x.x.x.x/m
-                    ip = IP(pool_range.strip())
-                    range_start = IP(ip[0])
-                    range_end = IP(ip[-1])
-            except ValueError:
+            except (AttributeError, KeyError, TypeError, ValueError):
                 _logger.info(
-                    "Pool range in pool with id %d from %s configured with unknown format '%s', skipping...",
-                    pool_id,
+                    'Could not parse pool in subnet %d from API at %s, skipping... '
+                    '(make sure every pool has "pool-id" and "pool" configured)',
+                    subnet_id,
                     self._url,
-                    pool_range,
                 )
                 continue
-
-            name = pool.get("user-context", {}).get(self._user_context_poolname_key, None)
-            name = name or f"pool-{range_start.strNormal()}-{range_end.strNormal()}"
 
             yield Pool(
                 subnet_id=subnet_id,
                 pool_id=pool_id,
-                name=name,
-                range_start=range_start,
-                range_end=range_end,
+                name=pool_name,
+                range_start=pool_start,
+                range_end=pool_end,
             )
+
+
+    def _parse_kea_pool_range(self, pool_range: str) -> tuple[IP, IP]:
+        """
+        Returns a pair where the first element is the first IP and
+        the second element is the last IP in the IP range represented
+        by pool_range.
+
+        :param pool_range: string representing the
+        """
+        if "-" in pool_range:
+            # x.x.x.x - x.x.x.x
+            range_start, _, range_end = pool_range.partition("-")
+            range_start = IP(range_start.strip())
+            range_end = IP(range_end.strip())
+        else:
+            # x.x.x.x/m
+            ip = IP(pool_range.strip())
+            range_start = IP(ip[0])
+            range_end = IP(ip[-1])
+        return range_start, range_end
+
+
+
 
 
     def _create_session(self) -> Session:
