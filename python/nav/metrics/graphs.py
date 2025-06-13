@@ -383,5 +383,10 @@ def diffed_series(*series: list[str] | str) -> list[str]:
     return [tmpl.format(paths=",".join(flattened(series)))]
 
 
+def colored_series(*series: list[str] | str, color="blue") -> list[str]:
+    tmpl = "color({path}, '{color}')"
+    return [tmpl.format(path=path, color=color.lstrip("#")) for path in flattened(series)]
+
+
 def json_series_url(*series: list[str] | str, title: str) -> str:
     return get_simple_graph_url(flattened(series), format="json", title=title)

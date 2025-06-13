@@ -42,12 +42,13 @@ from django.urls import reverse
 from nav import util
 from nav.bitvector import BitVector
 from nav.metrics.data import get_netboxes_availability
-from nav.metrics.graphs import diffed_series, get_simple_graph_url, Graph, completed_series, summed_series, json_series_url
-from nav.metrics.names import get_all_leaves_below, raw_metric_query
+from nav.metrics.graphs import colored_series, diffed_series, get_simple_graph_url, Graph, completed_series, summed_series, json_series_url
+from nav.metrics.names import get_all_leaves_below, get_metric_nonleaf_children, raw_metric_query
 from nav.metrics.templates import (
     metric_prefix_for_interface,
     metric_prefix_for_ports,
     metric_prefix_for_device,
+    metric_path_for_dhcp_pool,
     metric_prefix_for_sensors,
     metric_path_for_sensor,
     metric_path_for_prefix,
@@ -1566,48 +1567,59 @@ class Vlan(models.Model):
 
         return json_series_url(*series, title=title)
 
-    def get_dhcp_graph_url(self, family=4):
-        """Creates a graph url with dhcp stats for the given family"""
-        assert family in [4]
-        pools = self.get_contained_dhcp_pools()
-        series = []
+    def get_dhcp_pool_graph_urls(self):
+        """Creates a graph url with dhcp stats for IPv4"""
+        pools = self.get_graphite_dhcp_pools()
+        serie_urls = []
         for (endpoint_name, pool_name), range_list in pools.items():
-            ranges_str = ",".join(f"{start}-{end}" for start, end in range_list)
-            pool_str = f"{endpoint_name} {pool_name}"
-            assigned = completed_series(
-                summed_series(f"nav.dhcp.pool.{endpoint_name}.{pool_name}.*.*.assigned"),
-                name=f"{pool_str} ({ranges_str}) assigned addresses",
-                renderer="area",
-            )
-            remaining = completed_series(
-                diffed_series(
-                    summed_series(f"nav.dhcp.pool.{endpoint_name}.{pool_name}.*.*.total"),
-                    summed_series(f"nav.dhcp.pool.{endpoint_name}.{pool_name}.*.*.assigned"),
-                ),
-                name=f"{pool_str}",
-                renderer="area",
-            )
-            series.append(assigned)
-            series.append(remaining)
+            series = []
+            pool_str = f"{endpoint_name}/{pool_name}"
+            for range_start, range_end in range_list:
+                assigned = completed_series(
+                    metric_path_for_dhcp_pool(
+                        endpoint_name,
+                        pool_name,
+                        range_start,
+                        range_end,
+                        "assigned",
+                    ),
+                    name=f"assigned addresses in range {range_start} to {range_end}",
+                    renderer="area",
+                )
+                series.append(assigned)
 
-        title = f"Total IPv{family} addresses on vlan {str(self)} - stacked"
+            unassigned = completed_series(
+                    diffed_series(
+                        summed_series(
+                            f"nav.dhcp.pool.{endpoint_name}.{pool_name}.*.*.total"
+                        ),
+                        summed_series(
+                            f"nav.dhcp.pool.{endpoint_name}.{pool_name}.*.*.assigned"
+                        ),
+                    ),
+                name=f"unassigned addresses",
+                renderer="area",
+                color="whitesmoke",
+            )
+            series.append(unassigned)
+            title = f"Pool '{pool_name}' (obtained from DHCP server '{endpoint_name}')"
+            serie_urls.append(json_series_url(*series, title=title))
 
-        return json_series_url(*series, title=title)
+        return serie_urls
 
 
     def has_dhcp_stats(self):
         """Returns True if any DHCP statistic exists"""
-        return bool(self.get_contained_dhcp_pools())
+        return bool(self.get_graphite_dhcp_pools())
 
     # TODO: Cache
     # TODO: Do we need to assert that all vlan subnets stored in NAV are disjoint or must we check it here
     #      so as to avoid potential duplicate graphite subnets/pools in the return value?
-    def get_contained_dhcp_pools(self) -> dict[tuple[str, str], list[tuple[IPy.IP, IPy.IP]]]:
+    def get_graphite_dhcp_pools(self) -> dict[tuple[str, str], list[tuple[IPy.IP, IPy.IP]]]:
         """
-        Fetches all subnets and their respective pools that are stored under
-        'nav.dhcp.subnet.*.pools.*' in graphite and that are contained by some
-        subnet of this vlan. The returned dict has the following structure:
-
+        Fetches all pools that are stored under 'nav.dhcp.pool.*.*.*.*' in
+        graphite and that are contained by some subnet of this vlan. The
+        returned dict has the following structure:
         """
 
         def unescape_address(escaped_prefix: str) -> IPy.IP:
@@ -1624,23 +1636,29 @@ class Vlan(models.Model):
         if len(vlan_prefixes) == 0:
             return {}
 
-        graphite_paths = [node["id"].split(".") for node in raw_metric_query("nav.dhcp.pool.*.*.*.*")]
+        match raw_metric_query("nav.dhcp.pool.*.*.*.*", operation="expand"):
+            case {"results": list(graphite_paths)}:
+                pass
+            case _:
+                return {}
+
         if len(graphite_paths) == 0:
             return {}
 
-        graphite_pools = defaultdict(list)
+        all_pools = defaultdict(list)
         relevant_pools = set()
         for path in graphite_paths:
-            range_start = unescape_address(path[5])
-            range_end = unescape_address(path[6])
-            endpoint_name = path[3]
-            pool_name = path[4]
-            graphite_pools[(endpoint_name, pool_name)].append((range_start, range_end))
+            parts = path.split(".")
+            range_start = unescape_address(parts[5])
+            range_end = unescape_address(parts[6])
+            endpoint_name = parts[3]
+            pool_name = parts[4]
+            all_pools[(endpoint_name, pool_name)].append((range_start, range_end))
 
             if range_start in vlan_prefixes or range_end in vlan_prefixes:
                 relevant_pools.add((endpoint_name, pool_name))
 
-        return {pool: graphite_pools[pool] for pool in relevant_pools}
+        return {pool: all_pools[pool] for pool in relevant_pools}
 
 
 class NetType(models.Model):
