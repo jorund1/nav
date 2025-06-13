@@ -300,14 +300,24 @@ class Client:
 
         # Any valid response from Kea is a JSON list with one entry corresponding to the
         # response from either the dhcp4 or dhcp6 service we queried
-        match responses:
-            case [{"result": int(status)} as response]:
-                pass
-            case {"result": int(status), "text": str(message)}:
+        if not (
+            isinstance(responses, list)
+            and len(responses) == 1
+            and isinstance((response := responses[0]), dict)
+            and "result" in response
+            and isinstance((status := response["result"]), int)
+        ):
+            if (
+                isinstance(responses, dict)
+                and "result" in responses
+                and "text" in responses
+                and isinstance((status := responses["result"]), int)
+                and isinstance((message := responses["text"]), str)
+            ):
                 # If the response is a JSON object it's a specific error message
                 # See https://kea.readthedocs.io/en/kea-2.6.0/arm/ctrl-channel.html#control-agent-command-response-format
                 raise KeaUnexpected(f"{status}: {message}")
-            case _:
+            else:
                 raise KeaUnexpected(
                     f"{self._url} does not look like a Kea API; "
                     "response JSON structured in an unknown way",
