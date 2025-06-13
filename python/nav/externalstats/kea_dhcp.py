@@ -31,7 +31,8 @@ from requests import RequestException, JSONDecodeError, Session
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-from nav.errors import CommunicationError, ConfigurationError
+from nav.errors import ConfigurationError
+from nav.externalstats.errors import CommunicationError
 from nav.metrics.templates import metric_path_for_dhcp_pool
 
 
