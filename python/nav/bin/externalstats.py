@@ -119,14 +119,24 @@ def get_endpoint_clients(config):
             cls = ENDPOINT_CLIENTS[endpoint_type]
         except KeyError:
             _logger.warning(
-                "Invalid endpoint type '%s' defined in config section [%s], skipping...",
+                "Invalid endpoint type '%s' defined in config section [%s], skipping "
+                "endpoint...",
                 endpoint_type,
                 section,
             )
             continue
 
-        yield cls(endpoint_name, **kwargs)
-
+        try:
+            client = cls(endpoint_name, **kwargs)
+        except ConfigurationError:
+            _logger.warning(
+                "Endpoint type '%s' defined in config section [%s] is badly configured, "
+                "skipping endpoint...",
+                endpoint_type,
+                section,
+            )
+        else:
+            yield client
 
 
 if __name__ == "__main__":
