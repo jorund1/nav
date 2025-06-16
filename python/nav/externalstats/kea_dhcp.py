@@ -61,7 +61,9 @@ class Client:
           server. The 'lease-stats' hook is required for reliable stats when
           multiple servers share the same lease database because the standard
           commands issue the cache, not the DB. This client does not support the
-          hook. See https://kea.readthedocs.io/en/kea-2.6.3/arm/hooks.html#libdhcp-stat-cmds-so-statistics-commands-for-supplemental-lease-statistics.
+          hook. The hook nevertheless doesn't support fetching statistics on a
+          per-pool basis, only per-subnet pasis, which is too coarse for us.
+          See https://kea.readthedocs.io/en/kea-2.6.3/arm/hooks.html#libdhcp-stat-cmds-so-statistics-commands-for-supplemental-lease-statistics.
     """
 
     def __init__(
@@ -109,8 +111,8 @@ class Client:
 
     def fetch_stats(self) -> list[GraphiteMetric]:
         """
-        Fetches and returns a list containing the most recent stats for each
-        DHCP address pool. The stats collected for each address pool are:
+        Fetches and returns a list containing the most recent stats of interest
+        for each DHCP address pool. The stats of interest are:
 
         * The total amount of addresses in that pool.
 
@@ -122,21 +124,27 @@ class Client:
           subset of the set of assigned addresses.
 
         If the Kea API responds with an empty response to one or more of the
-        requests for some stat(s), these stats will be missing in the returned
-        list, but a list is still succesfully returned. Other errors during this
-        call will cause a subclass of
-        nav.errors.externalstats.CommunicationError or
-        nav.errors.externalstats.ConfigurationError to be raised.
+        stats of interest for a pool, these stats will be missing in the
+        returned list, but a list is still succesfully returned. Other errors
+        during this call will cause a subclass of
+        nav.externalstats.errors.CommunicationError or
+        nav.errors.ConfigurationError to be raised.
         """
         self._session = self._create_session()
         self._start_time = time.time()
 
-        config  = self._fetch_kea_config()
-        all_stats = self._fetch_all_stats()
+        config = self._fetch_kea_config()
+        raw_stats = self._fetch_raw_stats()
 
-        subnets = self._subnets_of_config(config)
-        pools   = list(chain.from_iterable(self._pools_of_subnet(subnet) for subnet in subnets))
-        stats   = list(chain.from_iterable(self._stats_of_pool(all_stats, pool) for pool in pools))
+        subnets = (
+            self._subnets_of_config(config)
+        )
+        pools = list(
+            chain.from_iterable(self._pools_of_subnet(subnet) for subnet in subnets)
+        )
+        stats = list(
+            chain.from_iterable(self._stats_of_pool(raw_stats, pool) for pool in pools)
+        )
 
         self._log_consistency_with_upstream_pools(pools)
         self._log_runtime(
@@ -151,59 +159,19 @@ class Client:
         return stats
 
 
-    def _fetch_pool_stats(self, pool: Pool) -> Iterator[GraphiteMetric]:
-        for nav_stat_name, api_stat_name in self._api_namings:
-            value = self._fetch_pool_stat_value(pool, api_stat_name)
-            if value is None:
-                continue
-            path = metric_path_for_dhcp_pool(
-                self._name,
-                pool.name,
-                pool.range_start,
-                pool.range_end,
-                nav_stat_name
-            )
-            yield (path, (self._start_time, value))
-
-
-    def _fetch_pool_stat_value(
-        self, pool: Pool, api_stat_name: str
-    ) -> Optional[int]:
+    def _fetch_raw_stats(self) -> dict:
         """
-        Return the most recent stat value recorded by the Kea DHCP server for
-        the given address pool and api stat name. (API command: 'statistic-get'.)
+        Returns all statistics recorded by the Kea DHCP server.
+        (API command: 'statistic-get-all')
         """
-        statistic = f"subnet[{pool.subnet_id}].pool[{pool.pool_id}].{api_stat_name}"
-        try:
-            response = self._send_query("statistic-get", name=statistic)
-        except KeaEmpty:
-            # This may occur if the subnet we query have been removed from the
-            # DHCP server's configuration at time of request
-            response = {}
-
-        samples = response.get("arguments", {}).get(statistic, [])
-
-        if len(samples) == 0:
-            _logger.info(
-                "No samples found when querying for '%s' in pool with range '%s-%s' "
-                "and name '%s'",
-                api_stat_name,
-                pool.range_start,
-                pool.range_end,
-                pool.name,
-            )
-            return None
-
-        # The reference API consumer assumes the first sample is the most recent
-        # See https://gitlab.isc.org/isc-projects/stork/-/blob/4193375c01e3ec0b3d862166e2329d76e686d16d/backend/server/apps/kea/rps.go#L223-227
-        value, _timestring = samples[0]
-        return value
+        response = self._send_query("statistic-get-all")
+        return response.get("arguments", {})
 
 
     def _fetch_kea_config(self) -> dict:
         """
-        Returns the current configuration of the Kea DHCP server that the Kea
-        API serves. (API command: 'config-get'.)
+        Returns the current configuration of the Kea DHCP server.
+        (API command: 'config-get'.)
         """
         if (
             self._kea_config is None
@@ -219,8 +187,8 @@ class Client:
 
     def _fetch_kea_config_hash(self) -> Optional[str]:
         """
-        Returns the hash of the current config of the Kea DHCP server
-        that the Kea API serves. (API command: 'config-hash-get'.)
+        Returns the hash of the current configation of the Kea DHCP server.
+        (API command: 'config-hash-get'.)
         """
         try:
             return (
@@ -304,6 +272,7 @@ class Client:
                 # See https://kea.readthedocs.io/en/kea-2.6.0/arm/ctrl-channel.html#control-agent-command-response-format
                 raise KeaUnexpected(f"{status}: {message}")
             else:
+                # Otherwise, something odd is happening
                 raise KeaUnexpected(
                     f"{self._url} does not look like a Kea API; "
                     "response JSON structured in an unknown way",
@@ -327,7 +296,10 @@ class Client:
         Creates and returns an HTTP session with authentication based on
         credentials passed during object initialization.
         """
-        _logger.debug("Creating new HTTP session for use with Kea API at %s", self._url)
+        _logger.debug(
+            "Creating new HTTP/HTTPS session for use with Kea API at %s",
+            self._url
+        )
 
         session = Session()
 
@@ -343,7 +315,10 @@ class Client:
 
         https = self._url.startswith("https://")
 
-        if not https:
+        if https:
+            _logger.debug("Using HTTPS")
+        else:
+            _logger.debug("Using HTTP")
             _logger.warning(
                 "Using HTTP to request potentially sensitive data such as API passwords"
             )
@@ -377,7 +352,8 @@ class Client:
 
     def _subnets_of_config(self, config: dict) -> Iterator[dict]:
         """
-        Returns one subnet dict per subnet configured under "subnet" and under "shared-networks"
+        Returns one subnet-dict per subnet configured under "subnet" and under "shared-networks"
+        of a Kea configuration.
         """
         subnetkey = f"subnet{self._dhcp_version}"
 
@@ -392,8 +368,8 @@ class Client:
 
     def _pools_of_subnet(self, subnet: dict) -> Iterator[Pool]:
         """
-        Returns one Pool instance per pool configured for a subnet in a Kea
-        DHCP server's configuration.
+        Returns one Pool instance per pool configured under "pools" of a subnet
+        of a Kea configuration.
         """
         try:
             subnet_id = int(subnet["id"])
@@ -430,6 +406,41 @@ class Client:
             )
 
 
+    def _stats_of_pool(self, raw_stats: dict, pool: Pool) -> Iterator[GraphiteMetric]:
+        """
+        Return as graphite metric tuples the most recent stats of interest in
+        raw_stats, for the given pool.
+
+        raw_stats is a dictionary representing the result of the Kea API command
+        'statistic-get-all'.
+        """
+
+        for nav_stat_name, api_stat_name in self._api_namings:
+            statistic = f"subnet[{pool.subnet_id}].pool[{pool.pool_id}].{api_stat_name}"
+            samples = raw_stats.get(statistic, [])
+            if len(samples) == 0:
+                _logger.info(
+                    "No samples found when querying for '%s' in pool having range "
+                    "'%s-%s' and name '%s'",
+                    api_stat_name,
+                    pool.range_start,
+                    pool.range_end,
+                    pool.name,
+                )
+            else:
+                # The reference API client assumes samples[0] is the most recent sample
+                # See https://gitlab.isc.org/isc-projects/stork/-/blob/4193375c01e3ec0b3d862166e2329d76e686d16d/backend/server/apps/kea/rps.go#L223-227
+                value, _timestring = samples[0]
+                path = metric_path_for_dhcp_pool(
+                    self._name,
+                    pool.name,
+                    pool.range_start,
+                    pool.range_end,
+                    nav_stat_name,
+                )
+                yield (path, (self._start_time, value))
+
+
     def _bounds_of_pool_range(self, pool_range: str) -> tuple[IP, IP]:
         """
         Returns a pair where the first element is the first IP and the second
@@ -462,7 +473,7 @@ class Client:
         if not isinstance(pool_name, str):
             _logger.debug(
                 '%s did not find a pool name when looking up "%s" in "user-context" '
-                'for some pool, defaulting to name "%s"... ',
+                'for a pool, defaulting to name "%s"... ',
                 self,
                 pool_name_key,
                 fallback,
@@ -474,9 +485,9 @@ class Client:
     def _log_consistency_with_upstream_pools(self, local_pools: list):
         """
         The part of the Kea API that deal with pools identify each pool by
-        ID. This check will see whether or not the mapping between pool ID and
-        pool object differs among the pools stored in the client and the pools
-        known to the Kea API right now.
+        ID. This function logs a warning if the mapping between pool ID and pool
+        object differs between the pools stored in the client (local_pools) and
+        the pools known to the Kea API right now.
         """
         upstream_config  = self._fetch_kea_config()
         upstream_subnets = self._subnets_of_config(upstream_config)

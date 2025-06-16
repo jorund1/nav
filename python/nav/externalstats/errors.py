@@ -15,8 +15,7 @@
 #
 """Exceptions and errors related to externalstats."""
 
-from nav.errors import GeneralException, ConfigurationError
-
+from nav.errors import GeneralException
 
 class CommunicationError(GeneralException):
     """Communication error"""
