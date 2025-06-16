@@ -99,6 +99,13 @@ class Client:
             raise ValueError(f"DHCPv{dhcp_version} is not supported")
 
 
+    def __str__(self):
+        return (
+            f"client for Kea DHCPv{self._dhcp_version} API endpoint '{self._name}' "
+            f"at {self._url}"
+        )
+
+
     def fetch_stats(self) -> list[GraphiteMetric]:
         """
         Fetches and returns a list containing the most recent stats for each

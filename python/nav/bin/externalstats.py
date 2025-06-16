@@ -69,8 +69,34 @@ def collect_stats(config):
 
     _logger.info("--> Starting stats collection <--")
 
-    # TODO: Multithread
     stats = []
+
+    for client in get_endpoint_clients(config):
+        _logger.info(
+            "Collecting stats using %s",
+            client,
+        )
+        try:
+            stats.extend(client.fetch_stats())
+        except CommunicationError as err:
+            _logger.warning(
+                "Error while collecting stats using %s: %s, continuing...",
+                client,
+                err,
+            )
+        except Exception as err:
+            _logger.warning(
+                "Unexpected error while collecting stats using %s, continuing...",
+                client,
+                exc_info=err,
+            )
+
+    carbon.send_metrics(stats)
+
+    _logger.info("--> Stats collection done <--")
+
+
+def get_endpoint_clients(config):
     for section, options in config.items():
         if not section.startswith("endpoint_"):
             continue
@@ -86,25 +112,9 @@ def collect_stats(config):
                 section,
             )
             continue
-        _logger.info(
-            "Collecting stats from endpoint '%s' of type '%s'",
-            endpoint_name,
-            endpoint_type
-        )
-        client = cls(endpoint_name, **kwargs)
-        try:
-            stats.extend(client.fetch_stats())
-        except CommunicationError as err:
-            _logger.info(
-                "Error while collecting stats from endpoint '%s' of type '%s': %s",
-                endpoint_name,
-                endpoint_type,
-                str(err),
-            )
 
-    carbon.send_metrics(stats)
+        yield cls(endpoint_name, **kwargs)
 
-    _logger.info("--> Stats collection done <--")
 
 
 if __name__ == "__main__":
