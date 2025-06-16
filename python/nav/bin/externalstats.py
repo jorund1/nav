@@ -24,8 +24,8 @@ import logging
 from functools import partial
 
 from nav.config import getconfig
-from nav.errors import CommunicationError
 from nav.externalstats import kea_dhcp
+from nav.externalstats.errors import CommunicationError, ConfigurationError
 from nav.logs import init_generic_logging
 from nav.metrics import carbon
 
@@ -69,29 +69,41 @@ def collect_stats(config):
 
     _logger.info("--> Starting stats collection <--")
 
-    stats = []
+    all_stats = []
 
     for client in get_endpoint_clients(config):
         _logger.info(
-            "Collecting stats using %s",
+            "Collecting stats using %s...",
             client,
         )
+
         try:
-            stats.extend(client.fetch_stats())
+            client_stats = client.fetch_stats()
+        except ConfigurationError as err:
+            _logger.warning(
+                "%s is badly configured, skipping endpoint...",
+                client,
+            )
         except CommunicationError as err:
             _logger.warning(
-                "Error while collecting stats using %s: %s, continuing...",
+                "Error while collecting stats using %s: %s, skipping endpoint...",
                 client,
                 err,
             )
         except Exception as err:
             _logger.warning(
-                "Unexpected error while collecting stats using %s, continuing...",
+                "Unexpected error while collecting stats using %s, skipping endpoint...",
                 client,
                 exc_info=err,
             )
+        else:
+            all_stats.extend(client_stats)
+            _logger.info(
+                "Successfully collected stats using %s",
+                client,
+            )
 
-    carbon.send_metrics(stats)
+    carbon.send_metrics(all_stats)
 
     _logger.info("--> Stats collection done <--")
 

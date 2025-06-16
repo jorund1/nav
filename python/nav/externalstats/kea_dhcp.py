@@ -31,7 +31,7 @@ from requests import RequestException, JSONDecodeError, Session
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-from nav.errors import CommunicationError, ConfigurationError
+from nav.externalstats.errors import CommunicationError, ConfigurationError
 from nav.metrics.templates import metric_path_for_dhcp_pool
 
 
@@ -101,8 +101,8 @@ class Client:
 
     def __str__(self):
         return (
-            f"client for Kea DHCPv{self._dhcp_version} API endpoint '{self._name}' "
-            f"at {self._url}"
+            f"API client for Kea DHCPv{self._dhcp_version} endpoint '{self._name}' at "
+            f"{self._url}"
         )
 
 
@@ -341,7 +341,7 @@ class Client:
                 pass
             case _:
                 _logger.info(
-                    "Misconfigured subnet from %s, skipping...",
+                    "Misconfigured subnet from %s, skipping subnet...",
                     self._url,
                 )
                 return
@@ -352,7 +352,7 @@ class Client:
                     pass
                 case _:
                     _logger.info(
-                        'Misconfigured pool for subnet with id %d from %s, skipping... '
+                        'Misconfigured pool for subnet with id %d from %s, skipping pool... '
                         '(make sure every pool has "pool-id" and "pool" configured)',
                         subnet_id,
                         self._url,
@@ -372,7 +372,7 @@ class Client:
                     range_end = IP(ip[-1])
             except ValueError:
                 _logger.info(
-                    "Pool range in pool with id %d from %s configured with unknown format '%s', skipping...",
+                    "Pool range in pool with id %d from %s configured with unknown format '%s', skipping pool...",
                     pool_id,
                     self._url,
                     pool_range,
@@ -454,7 +454,7 @@ class Client:
 
 
     def _log_runtime(self, start_time: float, end_time: float, n_stats: int, n_pools: int):
-        _logger.info(
+        _logger.debug(
             "Fetched %d stats(s) from %d pool(s) in %.2f seconds from %s",
             n_stats,
             n_pools,

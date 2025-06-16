@@ -49,7 +49,3 @@ class NoServicesFound(GeneralException):
 
 class NoNetboxTypeError(GeneralException):
     "This netbox has no type"
-
-
-class CommunicationError(GeneralException):
-    """Communication error"""
