@@ -159,15 +159,8 @@ class Client:
         configuration.
         """
         config = self._fetch_kea_config()
-        subnetkey = f"subnet{self._dhcp_version}"
 
-        standalone_subnets = config.get(subnetkey, [])
-        shared_network_subnets = chain.from_iterable(
-            shared_network_config.get(subnetkey, [])
-            for shared_network_config in config.get("shared-networks", [])
-        )
-
-        for subnet in chain(standalone_subnets, shared_network_subnets):
+        for subnet in self._subnets_of_config(config):
             yield from self._pools_of_subnet(subnet)
 
 
@@ -393,6 +386,21 @@ class Client:
             _logger.debug("Not using client certificate authentication")
 
         return session
+
+
+    def _subnets_of_config(self, config: dict) -> Iterator[dict]:
+        """
+        Returns one subnet dict per subnet configured under "subnet" and under "shared-networks"
+        """
+        subnetkey = f"subnet{self._dhcp_version}"
+
+        standalone_subnets = config.get(subnetkey, [])
+        shared_network_subnets = chain.from_iterable(
+            shared_network_config.get(subnetkey, [])
+            for shared_network_config in config.get("shared-networks", [])
+        )
+
+        yield from chain(standalone_subnets, shared_network_subnets)
 
 
     def _pools_of_subnet(self, subnet: dict) -> Iterator[Pool]:
