@@ -41,11 +41,12 @@ _logger = logging.getLogger(__name__)
 @dataclass(order=True, frozen=True, kw_only=True)
 class Pool:
     """A Kea DHCP configured address pool"""
+    subnet_id: int
+    pool_id: int
+
     name: str
     range_start: IP
     range_end: IP
-    subnet_id: int
-    pool_id: int
 
 
 GraphiteMetric = tuple[str, tuple[float, int]]
@@ -73,7 +74,7 @@ class Client:
         client_cert_path: str = "",
         client_cert_key_path: str = "",
         user_context_poolname_key: str = "name",
-        timeout: int = 5,
+        timeout: float = 5.0,
     ):
         self._name: str = name
         self._url: str = url
@@ -123,7 +124,7 @@ class Client:
         If the Kea API responds with an empty response to one or more of the
         requests for some stat(s), these stats will be missing in the returned
         list, but a list is still succesfully returned. Other errors during this
-        call will cause a subclass of nav.errors.CommunicationError to be raised.
+        call will cause a subclass of nav.errors.externalstats.CommunicationError to be raised.
         """
         self._session = self._create_session()
 
@@ -215,7 +216,7 @@ class Client:
 
         # The reference API consumer assumes the first sample is the most recent
         # See https://gitlab.isc.org/isc-projects/stork/-/blob/4193375c01e3ec0b3d862166e2329d76e686d16d/backend/server/apps/kea/rps.go#L223-227
-        value, timestring = samples[0]
+        value, _timestring = samples[0]
         return value
 
 
@@ -305,14 +306,24 @@ class Client:
 
         # Any valid response from Kea is a JSON list with one entry corresponding to the
         # response from either the dhcp4 or dhcp6 service we queried
-        match responses:
-            case [{"result": int(status)} as response]:
-                pass
-            case {"result": int(status), "text": str(message)}:
+        if not (
+            isinstance(responses, list)
+            and len(responses) == 1
+            and isinstance((response := responses[0]), dict)
+            and "result" in response
+            and isinstance((status := response["result"]), int)
+        ):
+            if (
+                isinstance(responses, dict)
+                and "result" in responses
+                and "text" in responses
+                and isinstance((status := responses["result"]), int)
+                and isinstance((message := responses["text"]), str)
+            ):
                 # If the response is a JSON object it's a specific error message
                 # See https://kea.readthedocs.io/en/kea-2.6.0/arm/ctrl-channel.html#control-agent-command-response-format
                 raise KeaUnexpected(f"{status}: {message}")
-            case _:
+            else:
                 raise KeaUnexpected(
                     f"{self._url} does not look like a Kea API; "
                     "response JSON structured in an unknown way",
@@ -329,66 +340,6 @@ class Client:
         _raise_for_kea_status(status)
 
         return response
-
-
-    def _pools_of_subnet(self, subnet: dict) -> Iterator[Pool]:
-        """
-        Returns one _Pool instance per pool configured for a subnet in a Kea
-        DHCP server's configuration.
-        """
-        match subnet:
-            case {"id": int(subnet_id)}:
-                pass
-            case _:
-                _logger.info(
-                    "Misconfigured subnet from %s, skipping subnet...",
-                    self._url,
-                )
-                return
-
-        for pool in subnet.get("pools", []):
-            match pool:
-                case {"pool-id": int(pool_id), "pool": str(pool_range)}:
-                    pass
-                case _:
-                    _logger.info(
-                        'Misconfigured pool for subnet with id %d from %s, skipping pool... '
-                        '(make sure every pool has "pool-id" and "pool" configured)',
-                        subnet_id,
-                        self._url,
-                    )
-                    continue
-
-            try:
-                if "-" in pool_range:
-                    # x.x.x.x - x.x.x.x
-                    range_start, _, range_end = pool_range.partition("-")
-                    range_start = IP(range_start.strip())
-                    range_end = IP(range_end.strip())
-                else:
-                    # x.x.x.x/m
-                    ip = IP(pool_range.strip())
-                    range_start = IP(ip[0])
-                    range_end = IP(ip[-1])
-            except ValueError:
-                _logger.info(
-                    "Pool range in pool with id %d from %s configured with unknown format '%s', skipping pool...",
-                    pool_id,
-                    self._url,
-                    pool_range,
-                )
-                continue
-
-            name = pool.get("user-context", {}).get(self._user_context_poolname_key, None)
-            name = name or f"pool-{range_start.strNormal()}-{range_end.strNormal()}"
-
-            yield Pool(
-                subnet_id=subnet_id,
-                pool_id=pool_id,
-                name=name,
-                range_start=range_start,
-                range_end=range_end,
-            )
 
 
     def _create_session(self) -> Session:
@@ -442,6 +393,84 @@ class Client:
             _logger.debug("Not using client certificate authentication")
 
         return session
+
+
+    def _pools_of_subnet(self, subnet: dict) -> Iterator[Pool]:
+        """
+        Returns one Pool instance per pool configured for a subnet in a Kea
+        DHCP server's configuration.
+        """
+        try:
+            subnet_id = int(subnet["id"])
+        except (KeyError, TypeError, ValueError):
+            _logger.info(
+                "Misconfigured subnet from %s, skipping...",
+                self._url,
+            )
+            return
+
+        for pool in subnet.get("pools", []):
+            try:
+                pool_id = int(pool["pool-id"])
+                pool_start, pool_end = self._parse_pool_range(pool["pool"])
+                pool_name = self._name_of_pool(
+                    pool,
+                    fallback=f"pool-{pool_start.strNormal()}-{pool_end.strNormal()}",
+                )
+            except (AttributeError, KeyError, TypeError, ValueError):
+                _logger.info(
+                    'Could not parse pool in subnet %d from API at %s, skipping pool... '
+                    '(make sure every pool has "pool-id" and "pool" configured)',
+                    subnet_id,
+                    self._url,
+                )
+                continue
+
+            yield Pool(
+                subnet_id=subnet_id,
+                pool_id=pool_id,
+                name=pool_name,
+                range_start=pool_start,
+                range_end=pool_end,
+            )
+
+
+    def _parse_pool_range(self, pool_range: str) -> tuple[IP, IP]:
+        """
+        Returns a pair where the first element is the first IP and the second
+        element is the last IP of a string representing a range of IP addresses
+        used in the Kea configuration file.
+        """
+        if "-" in pool_range:
+            # x.x.x.x - x.x.x.x
+            range_start, _, range_end = pool_range.partition("-")
+            range_start = IP(range_start.strip())
+            range_end = IP(range_end.strip())
+        else:
+            # x.x.x.x/m
+            ip = IP(pool_range.strip())
+            range_start = IP(ip[0])
+            range_end = IP(ip[-1])
+        return range_start, range_end
+
+
+    def _name_of_pool(self, pool: dict, fallback: str) -> str:
+        """
+        Looks for a pool name in a pool of a Kea configuration.
+        Returns pool name if found, else returns a fallback name.
+        """
+        pool_name_key = self._user_context_poolname_key
+        pool_name = pool.get("user-context", {}).get(pool_name_key, None)
+        if not isinstance(pool_name, str):
+            _logger.debug(
+                '%s did not find a pool name when looking up "%s" in "user-context" '
+                'for some pool, defaulting to name "%s"... ',
+                self,
+                pool_name_key,
+                fallback,
+            )
+            return fallback
+        return pool_name
 
 
     def _log_pool_consistency(self, used_pools: list, maybe_updated_pools: list):
