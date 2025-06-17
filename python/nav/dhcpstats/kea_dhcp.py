@@ -18,20 +18,20 @@ Fetch DHCP stats from Kea DHCP servers, using the Kea API
 """
 
 from dataclasses import dataclass
-from datetime import datetime
 from enum import IntEnum
 from itertools import chain
 import json
 import logging
 import time
-from typing import Optional, Iterator, NewType
+from typing import Optional, Iterator
 
 from IPy import IP
 from requests import RequestException, JSONDecodeError, Session
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-from nav.externalstats.errors import CommunicationError, ConfigurationError
+from nav.errors import ConfigurationError
+from nav.dhcpstats.errors import CommunicationError
 from nav.metrics.templates import metric_path_for_dhcp_pool
 
 
@@ -127,7 +127,7 @@ class Client:
         stats of interest for a pool, these stats will be missing in the
         returned list, but a list is still succesfully returned. Other errors
         during this call will cause a subclass of
-        nav.externalstats.errors.CommunicationError or
+        nav.dhcpstats.errors.CommunicationError or
         nav.errors.ConfigurationError to be raised.
         """
         self._session = self._create_session()

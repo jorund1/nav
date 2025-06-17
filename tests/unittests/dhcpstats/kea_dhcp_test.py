@@ -2,8 +2,8 @@ import logging
 from unittest import mock
 from copy import deepcopy
 from collections import deque
-from nav.externalstats.kea_dhcp import *
-from nav.externalstats.kea_dhcp import _KeaStatus
+from nav.dhcpstats.kea_dhcp import *
+from nav.dhcpstats.kea_dhcp import _KeaStatus
 import pytest
 import requests
 import json
@@ -87,7 +87,7 @@ class TestRecognizableAPIResponses:
         assert list(client.fetch_stats()) == []
 
 
-    def test_fetch_stats_should_handle_empty_statistic_api_response(
+    def test_fetch_stats_should_handle_empty_statistic_in_statistics_api_response(
         self, valid_dhcp4, response_queue
     ):
         """
@@ -97,40 +97,26 @@ class TestRecognizableAPIResponses:
         'fetch_stats()' should return an empty list.
         """
         config, statistics, _ = valid_dhcp4
-        response_queue.autofill("dhcp4", config=config, statistics=None)
-        response_queue.add(
-            "statistic-get",
-            lambda kea_arguments, kea_service: make_api_response(
-                {kea_arguments["name"]: []},
-            ),
-        )
+        statistics = {key: [] for key, value in statistics.items()}
+        response_queue.autofill("dhcp4", config=config, statistics=statistics)
         client = Client(ENDPOINT_NAME, "http://example.org/")
         assert list(client.fetch_stats()) == []
 
 
-    def test_fetch_stats_should_handle_unsupported_statistic_api_response(
+    def test_fetch_stats_should_handle_empty_statistic_api_response(
         self, valid_dhcp4, response_queue
     ):
         """
-        If the Kea DHCP server doesn't support a specific statistic type
-        (e.g. because we query an outdated Kea version), just disregard that
-        statistic type, and in the extreme case that no statistic type at all is
-        supported, return an empty list.
-
-        From the Kea doc:
-          If the requested statistic is not found, the response contains an
-          empty map, i.e. only { } as an argument, but the status code still indicates
-          success (0).
-          https://web.archive.org/web/20230927054750/https://kea.readthedocs.io/en/kea-2.2.0/arm/stats.html#the-statistic-get-command
-
-        TODO: It may be benefitial to have NAV log a message when this lack of
-        statistic support occur.
+        If the Kea DHCP server returns an empty JSON object when querying for
+        all of its recorded statistics with the API call 'statistic-get-all',
+        then it has recorded no statistics and 'fetch_stats()' should return an
+        empty list.
         """
 
         config, statistics, _ = valid_dhcp4
         response_queue.autofill("dhcp4", config=config, statistics=None)
         response_queue.add(
-            "statistic-get",
+            "statistic-get-all",
             lambda kea_arguments, kea_service: make_api_response({})
         )
         client = Client(ENDPOINT_NAME, "http://example.org/")
@@ -194,7 +180,7 @@ class TestRecognizableAPIResponses:
         config, statistics, _ = valid_dhcp4
         response_queue.autofill("dhcp4", config=config, statistics=None)
         response_queue.add(
-            "statistic-get",
+            "statistic-get-all",
             lambda kea_arguments, kea_service: make_api_response(statistics, status=status),
         )
         client = Client(ENDPOINT_NAME, "http://example.org/")
@@ -255,7 +241,7 @@ class TestUnrecognizableAPIResponses:
         client = Client(ENDPOINT_NAME, "http://example.org/")
 
         response_queue.autofill("dhcp4", config=config, statistics=None)
-        response_queue.add("statistic-get", invalid_response)
+        response_queue.add("statistic-get-all", invalid_response)
         with pytest.raises(KeaUnexpected):
             client.fetch_stats()
 
@@ -522,6 +508,7 @@ def valid_dhcp4():
                                     "option-data": [],
                                     "pool": "42.0.4.1-42.0.4.5",
                                     "pool-id": 1,
+                                    # Pool with 'user-context'
                                     "user-context": {
                                         "name": "oslo-staff",
                                     },
@@ -543,6 +530,7 @@ def valid_dhcp4():
                                     "option-data": [],
                                     "pool": "42.0.5.1-42.0.5.5",
                                     "pool-id": 1,
+                                    # Pool without 'user-context'
                                 },
                             ],
                             "subnet": "42.0.5.0/24",
@@ -573,6 +561,7 @@ def valid_dhcp4():
                     "pools": [
                         {
                             "option-data": [],
+                            # First range format: x.x.x.x/m
                             "pool": "42.0.2.1-42.0.2.10",
                             "pool-id": 1,
                             "user-context": {
@@ -581,6 +570,7 @@ def valid_dhcp4():
                         },
                         {
                             "option-data": [],
+                            # Second range format: x.x.x.x - x.x.x.x
                             "pool": "42.0.2.32/28",
                             "pool-id": 3,
                             "user-context": {
@@ -649,6 +639,13 @@ def valid_dhcp4():
         "subnet[5].pool[1].assigned-addresses": [[0, "2025-05-30 05:49:49.468085"]],
         "subnet[5].pool[1].declined-addresses": [[0, "2025-05-30 05:49:49.468087"]],
         "subnet[5].pool[1].total-addresses": [[5, "2025-05-30 05:49:49.467976"]],
+
+        # Some irrelevant values that won't be used by the client:
+        "subnet[1].cumulative-assigned-addresses": [[0, "2022-02-11 17:54:17.487528"]],
+        "subnet[1].declined-addresses": [[0, "2022-02-11 17:54:17.487585"]],
+        "subnet[1].reclaimed-declined-addresses": [[0, "2022-02-11 17:54:17.487595"]],
+        "subnet[1].reclaimed-leases": [[0, "2022-02-11 17:54:17.487604"]],
+        "subnet[1].total-addresses": [[10, "2022-02-11 17:54:17.487512"]],
     }
 
 
@@ -840,9 +837,9 @@ def response_queue(monkeypatch):
                 assert service == [
                     expected_service
                 ], f"API Client for service '{expected_service}' should not send requests to service '{service}'"
-                return make_api_response({arguments["name"]: statistics[arguments["name"]]})
+                return make_api_response(statistics)
 
-            add_command_response("statistic-get", statistic_response, attrs)
+            add_command_response("statistic-get-all", statistic_response, attrs)
 
     class ResponseQueue:
         add = add_command_response

@@ -24,14 +24,15 @@ import logging
 from functools import partial
 
 from nav.config import getconfig
-from nav.externalstats import kea_dhcp
-from nav.externalstats.errors import CommunicationError, ConfigurationError
+from nav.dhcpstats import kea_dhcp
+from nav.dhcpstats.errors import CommunicationError
+from nav.errors import ConfigurationError
 from nav.logs import init_generic_logging
 from nav.metrics import carbon
 
-_logger = logging.getLogger("nav.externalstats")
-LOGFILE = "externalstats.log"
-CONFIGFILE = "externalstats.conf"
+_logger = logging.getLogger("nav.dhcpstats")
+LOGFILE = "dhcpstats.log"
+CONFIGFILE = "dhcpstats.conf"
 
 ENDPOINT_CLIENTS = {
     "kea-dhcp4": partial(kea_dhcp.Client, dhcp_version=4),
@@ -53,7 +54,7 @@ def parse_args():
         description="Collects statistics from endpoints not expected to be part of the "
         "network managed by NAV",
         epilog="Statistics are collected from each endpoint configured in "
-        "'CONFDIR/externalstats.conf', and then sent to the carbon backend configured in "
+        "'CONFDIR/dhcpstats.conf', and then sent to the carbon backend configured in "
         "'CONFDIR/graphite.conf'.",
     )
     return parser.parse_args()
