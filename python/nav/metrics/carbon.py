@@ -25,7 +25,6 @@ import logging
 import socket
 import time
 import warnings
-from typing import NamedTuple
 from nav.metrics import CONFIG
 
 _logger = logging.getLogger(__name__)
@@ -45,11 +44,6 @@ class CarbonWarning(UserWarning):
     """Custom warning class for Carbon connection related warnings"""
 
     pass
-
-
-class MetricTuple(NamedTuple):
-    path: str
-    datapoint: tuple[int, int]
 
 
 def send_metrics_to(metric_tuples, host, port=2003):

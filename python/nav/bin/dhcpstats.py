@@ -15,8 +15,7 @@
 # along with NAV. If not, see <http://www.gnu.org/licenses/>.
 #
 """
-Collects statistics from endpoints not expected to be part of the network
-managed by NAV
+Collects statistics from DHCP servers and sends them to the Carbon backend.
 """
 
 import argparse
@@ -40,21 +39,23 @@ ENDPOINT_CLIENTS = {
 
 
 def main():
-    """Start collecting statistics"""
+    """Start collecting statistics."""
     init_generic_logging(logfile=LOGFILE)
-    config = getconfig(CONFIGFILE)
     parse_args()
+    config = getconfig(CONFIGFILE)
     collect_stats(config)
 
 
 def parse_args():
-    """Builds an ArgumentParser and returns parsed program arguments"""
-    # Parse arguments mainly to support the --help option
+    """
+    Builds an ArgumentParser and returns parsed program arguments.
+    (For now, this is called solely to support the --help option.)
+    """
     parser = argparse.ArgumentParser(
-        description="Collects statistics from endpoints not expected to be part of the "
-        "network managed by NAV",
-        epilog="Statistics are collected from each endpoint configured in "
-        "'CONFDIR/dhcpstats.conf', and then sent to the carbon backend configured in "
+        description="Collects statistics from DHCP servers and sends them to the Carbon "
+        "backend",
+        epilog="Statistics are collected from each DHCP API endpoint configured in "
+        "'CONFDIR/dhcpstats.conf', and then sent to the Carbon backend configured in "
         "'CONFDIR/graphite.conf'.",
     )
     return parser.parse_args()
@@ -62,10 +63,10 @@ def parse_args():
 
 def collect_stats(config):
     """
-    Collects current stats from each configured endpoint
+    Collects current stats from each configured endpoint.
 
-    :param config: parsed INI configuration of endpoints to collect metrics
-    from
+    :param config: dhcpstats.conf INI-parsed into a dict specifying
+    endpoints to collect metrics from.
     """
 
     _logger.info("--> Starting stats collection <--")
@@ -79,7 +80,7 @@ def collect_stats(config):
         )
 
         try:
-            client_stats = client.fetch_stats()
+            fetched_stats = client.fetch_stats()
         except ConfigurationError as err:
             _logger.warning(
                 "%s is badly configured, skipping endpoint...",
@@ -98,7 +99,7 @@ def collect_stats(config):
                 exc_info=err,
             )
         else:
-            all_stats.extend(client_stats)
+            all_stats.extend(fetched_stats)
             _logger.info(
                 "Successfully collected stats using %s",
                 client,
@@ -110,6 +111,20 @@ def collect_stats(config):
 
 
 def get_endpoint_clients(config):
+    """
+    Yields one client per correctly configured endpoint in config. A section
+    of the config correctly configures an endpoint if:
+
+    * Its name starts with 'endpoint_'.
+    * It has the mandatory option 'type'.
+    * The value of the 'type' option is mapped to a client initializer
+      by ENDPOINT_CLIENTS, and the client doesn't raise a
+      ConfigurationError when it is initialized with the rest of the
+      options of the section as keyword arguments.
+
+    :param config: dhcpstats.conf INI-parsed into a dict specifying
+    endpoints to collect metrics from.
+    """
     for section, options in config.items():
         if not section.startswith("endpoint_"):
             continue

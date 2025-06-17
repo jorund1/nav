@@ -17,7 +17,7 @@
 """Getting graphs of NAV-collected data from Graphite"""
 
 import re
-from typing import Iterable
+from typing import Iterable, Union, Literal
 
 from django.urls import reverse
 from urllib.parse import urlencode
@@ -351,42 +351,66 @@ def translate_serieslist_to_regex(series):
     return re.compile(pat)
 
 
-def flattened(fluffy):
-    flattenedes = []
-    if isinstance(fluffy, Iterable) and not isinstance(fluffy, str):
-        for elem in fluffy:
-            flattenedes.extend(flattened(elem))
-    else:
-        flattenedes.append(fluffy)
-    return flattenedes
+CompletedSeries = tuple[str, dict]
 
 
-def completed_series(*series: list[str] | str, name: str, **meta: str) -> list[str]:
-    tmpl = "alias({path}, '{name}')"
+def completed_series(series_list: str, name: str, **meta: str) -> CompletedSeries:
+    """Add a name and rickshaw meta-arguments to the supplied series_list."""
+    tmpl = "alias({series_list}, '{name}')"
     if len(meta) > 0:
         name = ";;".join(f"{key}={val}" for key, val in meta.items()) + ";;" + name
-    return [tmpl.format(path=path, name=name) for path in flattened(series)]
+    return tmpl.format(series_list=series_list, name=name), meta
 
 
-def grouped_series(*series: list[str] | str) -> str:
-    tmpl = "group({paths})"
-    return tmpl.format(paths=",".join(flattened(series)))
+def grouped_series(*series_list: str) -> str:
+    """
+    Turn an arbitrary number of series_lists into a single series_list.
+    """
+    tmpl = "group({series_lists})"
+    return tmpl.format(series_lists=",".join(series_list))
 
 
-def summed_series(*series: list[str] | str) -> list[str]:
-    tmpl = "sumSeries({paths})"
-    return [tmpl.format(paths=",".join(flattened(series)))]
+def summed_series(*series_list: str) -> str:
+    """
+    Sum each series in all supplied series_lists and return as a single series_list.
+    """
+    tmpl = "sumSeries({series_lists})"
+    return tmpl.format(series_lists=",".join(series_list))
 
 
-def diffed_series(*series: list[str] | str) -> list[str]:
-    tmpl = "diffSeries({paths})"
-    return [tmpl.format(paths=",".join(flattened(series)))]
+def diffed_series(*series_list: str) -> str:
+    """
+    Subtract from the first series in the first seriesList the rest of the
+    supplied series from the first and following seriesLists.
+    """
+    tmpl = "diffSeries({series_lists})"
+    return tmpl.format(series_lists=",".join(series_list))
 
 
-def colored_series(*series: list[str] | str, color="blue") -> list[str]:
-    tmpl = "color({path}, '{color}')"
-    return [tmpl.format(path=path, color=color.lstrip("#")) for path in flattened(series)]
+def colored_series(series_list: str, color="blue") -> str:
+    """
+    Add a color to the supplied seriesList (only works for graphite bitmap graphs).
+    """
+    tmpl = "color({series_list}, '{color}')"
+    return tmpl.format(series_list=series_list, color=color.lstrip("#"))
 
 
-def json_series_url(*series: list[str] | str, title: str) -> str:
-    return get_simple_graph_url(flattened(series), format="json", title=title)
+AreaMode = Literal["none", "first", "all", "stacked"]
+def json_graph_url(*series_list: CompletedSeries, title: str) -> str:
+    """
+    Create a url for fetching the JSON data necessary to graph the supplied
+    series_lists.
+    """
+
+    for series, series_meta in series_list:
+        # The series_meta for each series is a list of meta arguments supplied to
+        # 'completed_series()' and is used by rickshaw when rendering. Here we
+        # try to extract some options from series_meta and translate them into
+        # rendering functions that the graphite renderer understands, to make
+        # graphs created by rickshaw and graphite look more similar.
+        if "color" in series_meta:
+
+
+
+
+    return get_simple_graph_url(series_list, format="json", title=title, areaMode=png_area)

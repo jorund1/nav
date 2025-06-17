@@ -1,7 +1,7 @@
 import logging
 from unittest import mock
 from copy import deepcopy
-from collections import deque
+from collections import deque, namedtuple
 from nav.dhcpstats.kea_dhcp import *
 from nav.dhcpstats.kea_dhcp import _KeaStatus
 import pytest
@@ -11,22 +11,22 @@ from requests.exceptions import JSONDecodeError
 from typing import Callable
 from datetime import datetime, timedelta
 
+
 ENDPOINT_NAME = "dhcp-server-foo"
 
-#TODO: Test when variying 'user_context_poolname_key'
 
-class TestRecognizableAPIResponses:
+class TestExpectedAPIResponses:
     """
-    Tests the various types of responses from the Kea Management API that the
-    client should expect and handle appropiately.
+    Checks that the client acts as expected when the Kea API responds in an
+    expected way
     """
 
     def test_fetch_stats_should_return_correct_stats(
         self, valid_dhcp4, response_queue
     ):
         """
-        This test checks that fetch_stats() returns the most recent stats from
-        the api for each <pool> and <stat type>.
+        This test checks that fetch_stats() returns the correct and most up to
+        date stats from the API for each <pool> and <stat type>.
         """
 
         config, statistics, expected_stats = valid_dhcp4
@@ -40,8 +40,9 @@ class TestRecognizableAPIResponses:
             Set stat timestamps to zero, because we do not care to compare the
             time a stat was fetched into NAV in this test.
             """
-            return sorted((path, (0, value)) for (path, (time, value)) in stats)
+            return sorted((path, (0, value)) for (path, (_time, value)) in stats)
 
+        assert len(actual_stats) > 0
         assert normalize(actual_stats) == normalize(expected_stats)
 
 
@@ -50,8 +51,12 @@ class TestRecognizableAPIResponses:
     ):
         """
         This test checks that fetch_stats() returns stats that have recent
-        enough timestamps - so that periodically fetching stats will form an
-        evenly spaced timeseries in graphite.
+        enough timestamps (instead of the potentially very old timestamps
+        representing the last time the stat was changed that the API assigns
+        each stat).
+
+        When fetched stats have recent timestamps, they will form an evenly
+        spaced timeseries in graphite.
         """
 
         config, statistics, expected_stats = valid_dhcp4
@@ -60,7 +65,7 @@ class TestRecognizableAPIResponses:
 
         actual_stats = client.fetch_stats()
         assert len(actual_stats) > 0
-        for (path, (time, value)) in actual_stats:
+        for (_path, (time, _value)) in actual_stats:
             assert time >= (datetime.now() - timedelta(minutes=5)).timestamp()
 
 
@@ -69,15 +74,12 @@ class TestRecognizableAPIResponses:
     ):
         """
         The client should handle the case where the Kea API responds with an
-        empty dictionary as a response to a config request.  We assume in this
-        case that the Kea DHCP server we query just doesn't have any pools
+        empty JSON object as a response to a 'config-get' request.  We assume in
+        this case that the Kea DHCP server we query just doesn't have any pools
         configured.  The correct thing to do in this case is to just return an
         empty list of stats since there are no pools to fetch from.
-
-        TODO: It may be benefitial to have NAV log a message when this lack of
-        pool configuration occur.
         """
-        config, statistics, _ = valid_dhcp4
+        config, statistics, expected_stats = valid_dhcp4
         response_queue.autofill("dhcp4", config=None, statistics=statistics)
         response_queue.add(
             "config-get",
@@ -92,11 +94,11 @@ class TestRecognizableAPIResponses:
     ):
         """
         If the Kea DHCP server returns no values for a specific statistic,
-        disregard that stat in 'fetch_stats()' when creating a list of stats. In
-        the extreme case that all statistic from the API are empty,
-        'fetch_stats()' should return an empty list.
+        disregard that stat when creating a list of stats. In the extreme case
+        that all statistics from the API are empty, 'fetch_stats()' should
+        return an empty list.
         """
-        config, statistics, _ = valid_dhcp4
+        config, statistics, expected_stats = valid_dhcp4
         statistics = {key: [] for key, value in statistics.items()}
         response_queue.autofill("dhcp4", config=config, statistics=statistics)
         client = Client(ENDPOINT_NAME, "http://example.org/")
@@ -113,7 +115,7 @@ class TestRecognizableAPIResponses:
         empty list.
         """
 
-        config, statistics, _ = valid_dhcp4
+        config, statistics, expected_stats = valid_dhcp4
         response_queue.autofill("dhcp4", config=config, statistics=None)
         response_queue.add(
             "statistic-get-all",
@@ -132,7 +134,7 @@ class TestRecognizableAPIResponses:
         error.
         """
 
-        config, statistics, _ = valid_dhcp4
+        config, statistics, expected_stats = valid_dhcp4
         response_queue.autofill(
             "dhcp4",
             config=config,
@@ -156,7 +158,7 @@ class TestRecognizableAPIResponses:
         If the server reports an API-specific error regarding serving its
         configuration, the client should raise an error.
         """
-        config, statistics, _ = valid_dhcp4
+        config, statistics, expected_stats = valid_dhcp4
         response_queue.autofill("dhcp4", config=None, statistics=statistics)
         response_queue.add(
             "config-get",
@@ -177,7 +179,7 @@ class TestRecognizableAPIResponses:
         If the server reports an API-specific error regarding serving
         statistics, the client should raise an error.
         """
-        config, statistics, _ = valid_dhcp4
+        config, statistics, expected_stats = valid_dhcp4
         response_queue.autofill("dhcp4", config=config, statistics=None)
         response_queue.add(
             "statistic-get-all",
@@ -205,7 +207,7 @@ class TestRecognizableAPIResponses:
         the client should raise an error.
         """
         foohash = "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"
-        config, statistics, _ = valid_dhcp4
+        config, statistics, expected_stats = valid_dhcp4
         client = Client(ENDPOINT_NAME, "http://example.org/")
         config["Dhcp4"]["hash"] = foohash
         response_queue.autofill("dhcp4", config=config, statistics=statistics)
@@ -216,17 +218,49 @@ class TestRecognizableAPIResponses:
             client.fetch_stats()
 
 
+    def test_fetch_stats_should_check_and_warn_if_server_config_changed_during_call(
+        self, valid_dhcp4, response_queue, caplog
+    ):
+        """
+        Due to how the Kea API works, we must fetch the Kea DHCP configuration,
+        and then fetch the Kea DHCP statistics, and only after that can we
+        create some mapping from values in the configuration to values in the
+        statistics.
+
+        A warning should be logged when the Kea DHCP configuration changes after
+        we've fetched the configuration but before we've fetched the statistics
+        to signify that we might have relied upon a stale configuration while
+        fetching stats and thus may have created a bad mapping from
+        configuration to statistics.
+        """
+        config, statistics, expected_stats = valid_dhcp4
+        client = Client(ENDPOINT_NAME, "http://example.org/")
+        response_queue.autofill("dhcp4", config=None, statistics=statistics)
+        response_queue.add("config-get", make_api_response(config))
+        updated_config = deepcopy(config)
+        updated_config["Dhcp4"]["subnet4"][0]["pools"][0]["pool"] = "42.0.1.1-42.0.1.5"
+        response_queue.add(
+            "config-get",
+            lambda kea_arguments, kea_service: make_api_response(updated_config),
+        )
+
+        with caplog.at_level(logging.WARNING):
+            client.fetch_stats()
+
+        assert "configuration was modified while stats were being fetched" in caplog.text
+
+
 @pytest.mark.parametrize("invalid_response", ["{}", "foo", "\x00", "[]", "1"])
-class TestUnrecognizableAPIResponses:
+class TestUnexpectedAPIResponses:
     """
-    Checks that the client fails loudly if the Kea Management API responds in an
-    unrecognizable way.
+    Checks that the client fails loudly if the Kea API responds in an unexpected
+    way.
     """
 
     def test_fetch_stats_should_raise_an_exception_on_unrecognizable_config_api_response(
         self, valid_dhcp4, response_queue, invalid_response
     ):
-        config, statistics, _ = valid_dhcp4
+        config, statistics, expected_stats = valid_dhcp4
         client = Client(ENDPOINT_NAME, "http://example.org/")
 
         response_queue.autofill("dhcp4", config=None, statistics=statistics)
@@ -237,7 +271,7 @@ class TestUnrecognizableAPIResponses:
     def test_fetch_stats_should_raise_an_exception_on_unrecognizable_statistic_api_response(
         self, valid_dhcp4, response_queue, invalid_response
     ):
-        config, statistics, _ = valid_dhcp4
+        config, statistics, expected_stats = valid_dhcp4
         client = Client(ENDPOINT_NAME, "http://example.org/")
 
         response_queue.autofill("dhcp4", config=config, statistics=None)
@@ -248,7 +282,7 @@ class TestUnrecognizableAPIResponses:
     def test_fetch_stats_should_raise_an_exception_on_unrecognizable_config_hash_api_response(
         self, valid_dhcp4, response_queue, invalid_response
     ):
-        config, statistics, _ = valid_dhcp4
+        config, statistics, expected_stats = valid_dhcp4
         client = Client(ENDPOINT_NAME, "http://example.org/")
         config["Dhcp4"]["hash"] = "foo"
         response_queue.autofill("dhcp4", config=config, statistics=statistics)
@@ -335,140 +369,126 @@ class TestConfigCaching:
         assert len(response_queue.requests["config-get"]) == 2
 
 
-def test_fetch_stats_should_check_and_warn_if_server_config_changed_during_call(
-        valid_dhcp4, response_queue, caplog
-):
-    config, statistics, _ = valid_dhcp4
-    client = Client(ENDPOINT_NAME, "http://example.org/")
-    response_queue.autofill("dhcp4", config=None, statistics=statistics)
-    response_queue.add("config-get", make_api_response(config))
-    updated_config = deepcopy(config)
-    updated_config["Dhcp4"]["subnet4"][0]["pools"][0]["pool"] = "42.0.1.1-42.0.1.5"
-    response_queue.add(
-        "config-get",
-        lambda kea_arguments, kea_service: make_api_response(updated_config),
-    )
+class TestHTTPSession:
+    """
+    Checks that the client creates and uses HTTP sessions the way we want it to.
+    """
 
-    with caplog.at_level(logging.WARNING):
+    def test_fetch_stats_should_warn_if_using_http(
+        self, valid_dhcp4, response_queue, caplog
+    ):
+        """
+        A warning should be logged when the scheme is HTTP since config responses
+        from the Kea API may contain sensitive data such as passwords in plaintext.
+        """
+        config, statistics, expected_stats = valid_dhcp4
+        client = Client(ENDPOINT_NAME, "http://example.org/")
+        response_queue.autofill("dhcp4", config=config, statistics=statistics)
+
+        with caplog.at_level(logging.WARNING):
+            client.fetch_stats()
+
+        assert "Using HTTP to request potentially sensitive data such as API passwords" in caplog.text
+
+
+    def test_fetch_stats_should_warn_if_using_http_basic_auth_with_http(
+        self, valid_dhcp4, response_queue, caplog
+    ):
+        """
+        An extra warning when the scheme is HTTP should be logged when HTTP Basic
+        Authentication is being used since this entails passwords being sent in
+        plaintext from client to server.
+        """
+        config, statistics, expected_stats = valid_dhcp4
+        client = Client(ENDPOINT_NAME, "http://example.org/", http_basic_username="nav", http_basic_password="nav")
+        response_queue.autofill("dhcp4", config=config, statistics=statistics)
+
+        with caplog.at_level(logging.WARNING):
+            client.fetch_stats()
+
+        assert "Using HTTP Basic Authentication without HTTPS" in caplog.text
+
+
+    def test_fetch_stats_should_error_if_using_client_certificate_with_http(
+        self, valid_dhcp4, response_queue
+    ):
+        """
+        Client authentication is part of the TLS spec so it doesn't make sense to
+        continue if it is configured and the specified scheme is HTTP as we would
+        have to either ignore the wish to use HTTP or the wish to use TLS
+        certificates or both.
+        """
+        config, statistics, expected_stats = valid_dhcp4
+        client = Client(ENDPOINT_NAME, "http://example.org/", client_cert_path="/bar/baz.pem")
+        response_queue.autofill("dhcp4", config=config, statistics=statistics)
+
+        with pytest.raises(ConfigurationError):
+            client.fetch_stats()
+
+
+    def test_fetch_stats_should_use_http_basic_auth_when_this_is_configured(
+        self, valid_dhcp4, response_queue, monkeypatch
+    ):
+        """
+        Checks that the requests.Session object used during a call to
+        Client.fetch_stats() has HTTP Basic Authentication parameters configured
+        throughout the call if HTTP Basic Authentication was configured during
+        client init.
+        """
+        config, statistics, expected_stats = valid_dhcp4
+        client = Client(
+            ENDPOINT_NAME,
+            "http://example.org/",
+            http_basic_username="bar",
+            http_basic_password="baz",
+        )
+        response_queue.autofill("dhcp4", config=config, statistics=statistics)
+
+        post = Session.post
+        check_was_called = False
+        def check_auth(self, *args, **kwargs):
+            nonlocal check_was_called
+            check_was_called = True
+            assert self.auth == ("bar", "baz")
+            return post(self, *args, **kwargs)
+
+        monkeypatch.setattr(requests.Session, 'post', check_auth)
         client.fetch_stats()
 
-    assert "configuration was modified while stats were being fetched" in caplog.text
+        assert check_was_called
 
 
-def test_fetch_stats_should_warn_if_using_http(
-    valid_dhcp4, response_queue, caplog
-):
-    """
-    A warning should be logged when the scheme is HTTP since config responses
-    from the Kea API may contain sensitive data such as passwords in plaintext.
-    """
-    config, statistics, _ = valid_dhcp4
-    client = Client(ENDPOINT_NAME, "http://example.org/")
-    response_queue.autofill("dhcp4", config=config, statistics=statistics)
+    def test_fetch_stats_should_use_client_certificates_when_this_is_configured(
+        self, valid_dhcp4, response_queue, monkeypatch
+    ):
+        """
+        Checks that the requests.Session object used during a call to
+        Client.fetch_stats() has certificate parameters configured throughout the
+        call if client TLS certificates was configured during client init.
+        """
+        config, statistics, expected_stats = valid_dhcp4
+        client = Client(
+            ENDPOINT_NAME,
+            "https://example.org/",
+            client_cert_path="/bar/baz.pem",
+        )
+        response_queue.autofill("dhcp4", config=config, statistics=statistics)
 
-    with caplog.at_level(logging.WARNING):
+        post = Session.post
+        check_was_called = False
+        def check_cert(self, *args, **kwargs):
+            nonlocal check_was_called
+            check_was_called = True
+            assert self.cert == "/bar/baz.pem"
+            return post(self, *args, **kwargs)
+
+        monkeypatch.setattr(requests.Session, 'post', check_cert)
         client.fetch_stats()
 
-    assert "Using HTTP to request potentially sensitive data such as API passwords" in caplog.text
+        assert check_was_called
 
 
-def test_fetch_stats_should_warn_if_using_http_basic_auth_with_http(
-    valid_dhcp4, response_queue, caplog
-):
-    """
-    An extra warning when the scheme is HTTP should be logged when HTTP Basic
-    Authentication is being used since this entails passwords being sent in
-    plaintext from client to server.
-    """
-    config, statistics, _ = valid_dhcp4
-    client = Client(ENDPOINT_NAME, "http://example.org/", http_basic_username="nav", http_basic_password="nav")
-    response_queue.autofill("dhcp4", config=config, statistics=statistics)
-
-    with caplog.at_level(logging.WARNING):
-        client.fetch_stats()
-
-    assert "Using HTTP Basic Authentication without HTTPS" in caplog.text
-
-
-def test_fetch_stats_should_error_if_using_client_certificate_with_http(
-    valid_dhcp4, response_queue
-):
-    """
-    Client authentication is part of the TLS spec so it doesn't make sense to
-    continue if it is configured and the specified scheme is HTTP as we would
-    have to either ignore the wish to use HTTP or the wish to use TLS
-    certificates or both.
-    """
-    config, statistics, _ = valid_dhcp4
-    client = Client(ENDPOINT_NAME, "http://example.org/", client_cert_path="/bar/baz.pem")
-    response_queue.autofill("dhcp4", config=config, statistics=statistics)
-
-    with pytest.raises(ConfigurationError):
-        client.fetch_stats()
-
-
-def test_fetch_stats_should_use_http_basic_auth_when_this_is_configured(
-        valid_dhcp4, response_queue, monkeypatch
-):
-    """
-    Checks that the requests.Session object used during a call to
-    Client.fetch_stats() has HTTP Basic Authentication parameters configured
-    throughout the call if HTTP Basic Authentication was configured during
-    client init.
-    """
-    config, statistics, _ = valid_dhcp4
-    client = Client(
-        ENDPOINT_NAME,
-        "http://example.org/",
-        http_basic_username="bar",
-        http_basic_password="baz",
-    )
-    response_queue.autofill("dhcp4", config=config, statistics=statistics)
-
-    post = Session.post
-    check_was_called = False
-    def check_auth(self, *args, **kwargs):
-        nonlocal check_was_called
-        check_was_called = True
-        assert self.auth == ("bar", "baz")
-        return post(self, *args, **kwargs)
-
-    monkeypatch.setattr(requests.Session, 'post', check_auth)
-    client.fetch_stats()
-
-    assert check_was_called
-
-
-def test_fetch_stats_should_use_client_certificates_when_this_is_configured(
-        valid_dhcp4, response_queue, monkeypatch
-):
-    """
-    Checks that the requests.Session object used during a call to
-    Client.fetch_stats() has certificate parameters configured throughout the
-    call if client TLS certificates was configured during client init.
-    """
-    config, statistics, _ = valid_dhcp4
-    client = Client(
-        ENDPOINT_NAME,
-        "https://example.org/",
-        client_cert_path="/bar/baz.pem",
-    )
-    response_queue.autofill("dhcp4", config=config, statistics=statistics)
-
-    post = Session.post
-    check_was_called = False
-    def check_cert(self, *args, **kwargs):
-        nonlocal check_was_called
-        check_was_called = True
-        assert self.cert == "/bar/baz.pem"
-        return post(self, *args, **kwargs)
-
-    monkeypatch.setattr(requests.Session, 'post', check_cert)
-    client.fetch_stats()
-
-    assert check_was_called
-
-
+TestData = namedtuple("TestData", ["config", "statistics", "expected_stats"])
 @pytest.fixture
 def valid_dhcp4():
     config = {
@@ -685,7 +705,11 @@ def valid_dhcp4():
         (f"nav.dhcp.pool.{ENDPOINT_NAME}.pool-42_0_5_1-42_0_5_5.42_0_5_1.42_0_5_5.total", ("2025-05-30 05:49:49.467993", 5)),
     ]
 
-    return config, statistics, expected_stats
+    return TestData(
+        config=config,
+        statistics=statistics,
+        expected_stats=expected_stats
+    )
 
 
 def make_api_response(val: dict, status:_KeaStatus=_KeaStatus.SUCCESS):
@@ -772,7 +796,6 @@ def response_queue(monkeypatch):
                 "should be a JSON with a 'command' key. Instead, NAV sent "
                 f"\n\n{data!r}\n\n to the test's Kea Control Agent mock"
             )
-            raise
 
         kea_arguments = data.get("arguments", {})
         kea_service = data.get("service", [])

@@ -42,7 +42,7 @@ from django.urls import reverse
 from nav import util
 from nav.bitvector import BitVector
 from nav.metrics.data import get_netboxes_availability
-from nav.metrics.graphs import colored_series, diffed_series, get_simple_graph_url, Graph, completed_series, summed_series, json_series_url
+from nav.metrics.graphs import colored_series, diffed_series, get_simple_graph_url, Graph, completed_series, summed_series, json_graph_url
 from nav.metrics.names import get_all_leaves_below, get_metric_nonleaf_children, raw_metric_query
 from nav.metrics.templates import (
     metric_prefix_for_interface,
@@ -1561,19 +1561,18 @@ class Vlan(models.Model):
                 metric_path_for_prefix(prefix.net_address, 'ip_range')
                 for prefix in prefixes
             ]
-            series.append(completed_series(summed_series(ip_ranges), name="Max addresses"))
+            series.append(completed_series(summed_series(*ip_ranges), name="Max addresses"))
 
         title = f"Total IPv{family} addresses on vlan {str(self)} - stacked"
 
-        return json_series_url(*series, title=title)
+        return json_graph_url(*series, title=title)
 
     def get_dhcp_pool_graph_urls(self):
         """Creates a graph url with dhcp stats for IPv4"""
         pools = self.get_graphite_dhcp_pools()
-        serie_urls = []
+        graph_urls = []
         for (endpoint_name, pool_name), range_list in pools.items():
             series = []
-            pool_str = f"{endpoint_name}/{pool_name}"
             for range_start, range_end in range_list:
                 assigned = completed_series(
                     metric_path_for_dhcp_pool(
@@ -1583,7 +1582,7 @@ class Vlan(models.Model):
                         range_end,
                         "assigned",
                     ),
-                    name=f"assigned addresses in range {range_start} to {range_end}",
+                    name=f"Assigned addresses in range {range_start} to {range_end}",
                     renderer="area",
                 )
                 series.append(assigned)
@@ -1597,15 +1596,15 @@ class Vlan(models.Model):
                             f"nav.dhcp.pool.{endpoint_name}.{pool_name}.*.*.assigned"
                         ),
                     ),
-                name=f"unassigned addresses",
+                name=f"Unassigned addresses",
                 renderer="area",
                 color="whitesmoke",
             )
             series.append(unassigned)
             title = f"Pool '{pool_name}' (obtained from DHCP server '{endpoint_name}')"
-            serie_urls.append(json_series_url(*series, title=title))
+            graph_urls.append(json_graph_url(*series, title=title))
 
-        return serie_urls
+        return graph_urls
 
 
     def has_dhcp_stats(self):
@@ -1636,11 +1635,8 @@ class Vlan(models.Model):
         if len(vlan_prefixes) == 0:
             return {}
 
-        match raw_metric_query("nav.dhcp.pool.*.*.*.*", operation="expand"):
-            case {"results": list(graphite_paths)}:
-                pass
-            case _:
-                return {}
+        response = raw_metric_query("nav.dhcp.pool.*.*.*.*", operation="expand")
+        graphite_paths = response.get("results", [])
 
         if len(graphite_paths) == 0:
             return {}

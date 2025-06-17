@@ -18,6 +18,7 @@ Fetch DHCP stats from Kea DHCP servers, using the Kea API
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import IntEnum
 from itertools import chain
 import json
@@ -30,15 +31,15 @@ from requests import RequestException, JSONDecodeError, Session
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-from nav.errors import ConfigurationError
 from nav.dhcpstats.errors import CommunicationError
+from nav.errors import ConfigurationError
 from nav.metrics.templates import metric_path_for_dhcp_pool
 
 
 _logger = logging.getLogger(__name__)
 
 
-@dataclass(order=True, frozen=True, kw_only=True)
+@dataclass(order=True, frozen=True)
 class Pool:
     """A Kea DHCP configured address pool"""
     subnet_id: int
@@ -61,7 +62,7 @@ class Client:
           server. The 'lease-stats' hook is required for reliable stats when
           multiple servers share the same lease database because the standard
           commands issue the cache, not the DB. This client does not support the
-          hook. The hook nevertheless doesn't support fetching statistics on a
+          hook. Anyhow, the hook doesn't support fetching statistics on a
           per-pool basis, only per-subnet pasis, which is too coarse for us.
           See https://kea.readthedocs.io/en/kea-2.6.3/arm/hooks.html#libdhcp-stat-cmds-so-statistics-commands-for-supplemental-lease-statistics.
     """
@@ -93,6 +94,8 @@ class Client:
         self._start_time: float = time.time()
 
         if dhcp_version == 4:
+            # self._api_namings is a map between how stats are named in NAV and how stats
+            # are named in Kea.
             self._api_namings = (
                 ("total", "total-addresses"),
                 ("assigned", "assigned-addresses"),
@@ -115,29 +118,34 @@ class Client:
         for each DHCP address pool. The stats of interest are:
 
         * The total amount of addresses in that pool.
+          (Named "total" addresses in NAV.)
 
         * The amount of currently assigned (aka. leased) addresses in that pool.
+          (Named "assigned" addresses in NAV.)
 
         * The amount of declined addresses in that pool. That is, addresses in
           that pool that is erroneously used by unkown entities and therefore
           not available for assignment. The set of declined addresses is a
           subset of the set of assigned addresses.
+          (Named "declined" addresses in NAV.)
 
         If the Kea API responds with an empty response to one or more of the
         stats of interest for a pool, these stats will be missing in the
         returned list, but a list is still succesfully returned. Other errors
         during this call will cause a subclass of
-        nav.dhcpstats.errors.CommunicationError or
-        nav.errors.ConfigurationError to be raised.
+        nav.dhcpstats.errors.CommunicationError or nav.errors.ConfigurationError
+        to be raised.
         """
         self._session = self._create_session()
-        self._start_time = time.time()
 
-        config = self._fetch_kea_config()
+        local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
+        self._start_time = time.time() + local_tz_offset
+
+        kea_config = self._fetch_kea_config()
         raw_stats = self._fetch_raw_stats()
 
         subnets = (
-            self._subnets_of_config(config)
+            self._subnets_of_kea_config(kea_config)
         )
         pools = list(
             chain.from_iterable(self._pools_of_subnet(subnet) for subnet in subnets)
@@ -148,8 +156,8 @@ class Client:
 
         self._log_consistency_with_upstream_pools(pools)
         self._log_runtime(
-            self._start_time,
-            time.time(),
+            start_time=self._start_time,
+            end_time=time.time() + local_tz_offset,
             n_stats=len(stats),
             n_pools=len(pools)
         )
@@ -203,18 +211,23 @@ class Client:
 
     def _send_query(self, command: str, **kwargs) -> dict:
         """
-        Returns the API response from the Kea API to the
-        query with command `command` instructed towards the Kea DHCP server.
-        Additional keyword arguments to this function will be passed as
-        arguments to the command.
+        Returns the response from the Kea API to the given command instructed
+        towards the underlying Kea DHCP server. Keyword arguments to this
+        function will be passed along as arguments to the command.
 
         Communication errors (HTTP errors, JSON errors, access control errors,
-        unrecognized json response formats) causes a KeaException to be
+        unrecognized json response formats) causes a CommunicationError to be
         raised. If possible, it is reraised from a more descriptive error such
         as an HTTPError.
 
-        Valid Kea API responses that indicate a failure on the
-        server-end causes a descriptive subclass of KeaException to be raised.
+        Valid Kea API responses that indicate a failure on the server-end causes
+        a descriptive Kea-specific subclass of CommunicationError to be raised.
+
+        A ConfigurationError is raised if this client is configured in such a
+        way that it can't be consistent with its own configuration while still
+        properly communicating with the Kea API (for example when the use of
+        client certificates, which require TLS, are enabled but HTTPS is
+        disabled).
         """
         session = self._session or self._create_session()
 
@@ -350,10 +363,10 @@ class Client:
         return session
 
 
-    def _subnets_of_config(self, config: dict) -> Iterator[dict]:
+    def _subnets_of_kea_config(self, config: dict) -> Iterator[dict]:
         """
-        Returns one subnet-dict per subnet configured under "subnet" and under "shared-networks"
-        of a Kea configuration.
+        Returns one subnet-dict per subnet configured under "subnet" or under "shared-networks"
+        of a Kea DHCP configuration.
         """
         subnetkey = f"subnet{self._dhcp_version}"
 
@@ -369,7 +382,7 @@ class Client:
     def _pools_of_subnet(self, subnet: dict) -> Iterator[Pool]:
         """
         Returns one Pool instance per pool configured under "pools" of a subnet
-        of a Kea configuration.
+        of a Kea DHCP configuration.
         """
         try:
             subnet_id = int(subnet["id"])
@@ -390,8 +403,9 @@ class Client:
                 )
             except (AttributeError, KeyError, TypeError, ValueError):
                 _logger.info(
-                    'Could not parse pool in subnet %d from API at %s, skipping pool... '
-                    '(make sure every pool has "pool-id" and "pool" configured)',
+                    'Could not parse pool in subnet %d from %s, skipping pool...  (make '
+                    'sure every pool has "pool-id" and "pool" configured in the Kea DHCP '
+                    'configuration)',
                     subnet_id,
                     self._url,
                 )
@@ -420,7 +434,7 @@ class Client:
             samples = raw_stats.get(statistic, [])
             if len(samples) == 0:
                 _logger.info(
-                    "No samples found when querying for '%s' in pool having range "
+                    "No stats found when querying for '%s' in pool having range "
                     "'%s-%s' and name '%s'",
                     api_stat_name,
                     pool.range_start,
@@ -444,8 +458,8 @@ class Client:
     def _bounds_of_pool_range(self, pool_range: str) -> tuple[IP, IP]:
         """
         Returns a pair where the first element is the first IP and the second
-        element is the last IP of the string representing a range of IP
-        addresses as used in the Kea configuration file. Example:
+        element is the last IP of a string used in the Kea DHCP configuration
+        file for representing a range of IP addresses. Example:
 
         self._bounds_of_pool_range("10.0.0.0 - 10.0.0.10") == IP(10.0.0.0), IP(10.0.0.10)
         self._bounds_of_pool_range("10.0.0.0/24") == IP(10.0.0.0), IP(10.0.0.255)
@@ -465,7 +479,7 @@ class Client:
 
     def _name_of_pool(self, pool: dict, fallback: str) -> str:
         """
-        Looks for a pool name in a pool of a Kea configuration.
+        Looks for a pool name in a pool of a Kea DHCP configuration.
         Returns pool name if found, else returns a fallback name.
         """
         pool_name_key = self._user_context_poolname_key
@@ -490,7 +504,7 @@ class Client:
         the pools known to the Kea API right now.
         """
         upstream_config  = self._fetch_kea_config()
-        upstream_subnets = self._subnets_of_config(upstream_config)
+        upstream_subnets = self._subnets_of_kea_config(upstream_config)
         upstream_pools   = list(chain.from_iterable(self._pools_of_subnet(subnet) for subnet in upstream_subnets))
 
         if sorted(local_pools) != sorted(upstream_pools):
@@ -502,6 +516,10 @@ class Client:
 
 
     def _log_runtime(self, start_time: float, end_time: float, n_stats: int, n_pools: int):
+        """
+        Logs a debug message about the time spent during a 'self.fetch_stats()'
+        run and the amount of pools and stats seen.
+        """
         _logger.debug(
             "Fetched %d stats(s) from %d pool(s) in %.2f seconds from %s",
             n_stats,
@@ -553,8 +571,8 @@ class _KeaStatus(IntEnum):
 
 def _raise_for_kea_status(status: int):
     """
-    Raises a suitable subclass of CommunicationError if 'status' is not
-    _KeaStatus.SUCCESS.
+    Raises a suitable Kea-specific subclass of CommunicationError if status is
+    not _KeaStatus.SUCCESS.
     """
     if status == _KeaStatus.SUCCESS:
         return
