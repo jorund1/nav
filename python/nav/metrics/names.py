@@ -119,7 +119,7 @@ def nodewalk(top, ignored=None):
             yield x
 
 
-def raw_metric_query(query):
+def raw_metric_query(query, operation="find"):
     """Runs a query for metric information against Graphite's REST API.
 
     :param query: A search string, e.g. "nav.devices.some-gw_example_org.*"
@@ -127,7 +127,7 @@ def raw_metric_query(query):
 
     """
     base = CONFIG.get("graphiteweb", "base")
-    url = urljoin(base, "/metrics/find")
+    url = urljoin(base, "/metrics/" + operation)
     query = urlencode({'query': query})
     url = "%s?%s" % (url, query)
 
