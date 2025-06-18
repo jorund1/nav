@@ -1501,7 +1501,7 @@ class Prefix(models.Model):
                             "assigned",
                         ),
                     ),
-                    name=f"Assigned addresses in range {range_start} to {range_end}",
+                    name=f"Assigned IP addresses in range {range_start} to {range_end}",
                     renderer="area",
                 )
                 series_for_pool.append(assigned_addresses)
@@ -1521,10 +1521,22 @@ class Prefix(models.Model):
                 ),
                 name="Unassigned addresses",
                 renderer="area",
-                color="lightgray",
+                color="#d9d9d9",  # "Background" color
             )
             series_for_pool.append(unassigned_addresses)
-            title = f"Pool '{pool_name}' (obtained from DHCP server '{server_name}')"
+
+            max_addresses = aliased_series(
+                summed_series(
+                    nonempty_series(
+                        f"nav.dhcp.4.pool.{server_name}.{pool_name}.*.*.total"
+                    ),
+                ),
+                name="Max addresses",
+                color="#ff8000",  # Makes sure this line has consistent color on all graphs
+            )
+            series_for_pool.append(max_addresses)
+
+            title = f"Pool '{pool_name}' (DHCP server '{server_name}')"
             graph_urls.append(json_graph_url(*series_for_pool, title=title))
 
         return graph_urls
@@ -1574,12 +1586,12 @@ class Prefix(models.Model):
         for path in graphite_paths:
             parts = path.split(".")
             try:
-                range_start = unescape_address(parts[5])
-                range_end = unescape_address(parts[6])
+                range_start = unescape_address(parts[6])
+                range_end = unescape_address(parts[7])
             except ValueError:
                 continue
-            server_name = parts[3]
-            pool_name = parts[4]
+            server_name = parts[4]
+            pool_name = parts[5]
             pool_key = (server_name, pool_name)
             pool_ranges[pool_key].append((range_start, range_end))
 
