@@ -159,13 +159,13 @@
 
   {% comment %} Graph containing DHCP statistics for total, assigned and declined addresses {% endcomment %}
 
-  {% if has_dhcp_stats or graphite_error %}
+  {% if dhcp_pool_graph_urls or graphite_error %}
     <h2>DHCP graphs</h2>
     {% if graphite_error %}
       <span class="label alert">Graphite unreachable</span>
     {% else %}
       <ul class="small-block-grid-1 large-block-grid-2">
-        {% for graph in vlan.get_dhcp_pool_graph_urls %}
+        {% for graph in dhcp_pool_graph_urls %}
           <li class="dhcpgraph graphitegraph" data-url="{{ graph }}">
             <div class="rickshaw-container"></div>
           </li>
@@ -173,5 +173,4 @@
       </ul>
     {% endif %}
   {% endif %}
-
 {% endblock %}

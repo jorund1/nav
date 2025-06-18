@@ -1472,13 +1472,15 @@ class Prefix(models.Model):
         return reverse('prefix-details', args=[self.pk])
 
     def get_dhcp_pool_graph_urls(self, *others: "Prefix"):
-        """Creates a graph url with dhcp stats for IPv4"""
+        """
+        Creates a graph url with dhcp stats for IPv4
+        """
         pools = Prefix.get_graphite_dhcp_pools(self, *others)
         graph_urls = []
         for (endpoint_name, pool_name), range_list in pools.items():
-            series = []
+            series_for_pool = []
             for range_start, range_end in range_list:
-                assigned = completed_series(
+                assigned_addresses = completed_series(
                     metric_path_for_dhcp_pool(
                         endpoint_name,
                         pool_name,
@@ -1489,9 +1491,9 @@ class Prefix(models.Model):
                     name=f"Assigned addresses in range {range_start} to {range_end}",
                     renderer="area",
                 )
-                series.append(assigned)
+                series_for_pool.append(assigned_addresses)
 
-            unassigned = completed_series(
+            unassigned_addresses = completed_series(
                     diffed_series(
                         summed_series(
                             f"nav.dhcp.pool.{endpoint_name}.{pool_name}.*.*.total"
@@ -1504,9 +1506,9 @@ class Prefix(models.Model):
                 renderer="area",
                 color="whitesmoke",
             )
-            series.append(unassigned)
+            series_for_pool.append(unassigned_addresses)
             title = f"Pool '{pool_name}' (obtained from DHCP server '{endpoint_name}')"
-            graph_urls.append(json_graph_url(*series, title=title))
+            graph_urls.append(json_graph_url(*series_for_pool, title=title))
 
         return graph_urls
 
@@ -1515,11 +1517,19 @@ class Prefix(models.Model):
     ) -> dict[tuple[str, str], list[tuple[IPy.IP, IPy.IP]]]:
         """
         Fetches all pools that are stored under
-        'nav.dhcp.pool.<servername>.<poolname>.<poolstart>.<poolend>' in
-        graphite and that are intersecting this prefix or any of the prefixes in
-        the optional list of other prefixes. Returns a dict that for each pool
-        maps the pair (<servername>, <poolname>) to a list of
-        (<poolstart>, <poolend>) pairs.
+        'nav.dhcp.pool.<any servername>.<any poolname>.<any poolstart>.<any poolend>'
+        in graphite and that are intersecting this prefix or any of the prefixes
+        in the optional list of other prefixes. Returns a dict that, for each
+        pool, maps the pair (<servername>, <poolname>) to a list of (<poolstart>,
+        <poolend>) pairs.
+
+        > # self = Prefix(10.0.0.0/16)
+        > self.get_graphite_dhcp_pools()
+        > {
+        >     ('server1', 'pool1'): [(10.0.0.0, 10.0.0.10), (10.0.0.20, 10.0.0.30)],
+        >     ('server1', 'pool2'): [(10.0.1.0, 10.0.1.10)],
+        >     ('server2', 'pool1'): [(10.0.2.0, 10.0.2.30)],
+        > }
         """
         def unescape_address(escaped_prefix: str) -> IPy.IP:
             parts = escaped_prefix.split("_")
