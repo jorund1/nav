@@ -17,7 +17,6 @@
 """Getting graphs of NAV-collected data from Graphite"""
 
 import re
-from typing import Iterable, Union, Literal
 
 from django.urls import reverse
 from urllib.parse import urlencode
@@ -351,15 +350,12 @@ def translate_serieslist_to_regex(series):
     return re.compile(pat)
 
 
-CompletedSeries = tuple[str, dict]
-
-
-def completed_series(series_list: str, name: str, **meta: str) -> CompletedSeries:
+def completed_series(series_list: str, name: str, **meta: str) -> str:
     """Add a name and rickshaw meta-arguments to the supplied series_list."""
     tmpl = "alias({series_list}, '{name}')"
     if len(meta) > 0:
         name = ";;".join(f"{key}={val}" for key, val in meta.items()) + ";;" + name
-    return tmpl.format(series_list=series_list, name=name), meta
+    return tmpl.format(series_list=series_list, name=name)
 
 
 def grouped_series(*series_list: str) -> str:
@@ -395,22 +391,9 @@ def colored_series(series_list: str, color="blue") -> str:
     return tmpl.format(series_list=series_list, color=color.lstrip("#"))
 
 
-AreaMode = Literal["none", "first", "all", "stacked"]
-def json_graph_url(*series_list: CompletedSeries, title: str) -> str:
+def json_graph_url(*series_list: str, title: str) -> str:
     """
     Create a url for fetching the JSON data necessary to graph the supplied
     series_lists.
     """
-
-    for series, series_meta in series_list:
-        # The series_meta for each series is a list of meta arguments supplied to
-        # 'completed_series()' and is used by rickshaw when rendering. Here we
-        # try to extract some options from series_meta and translate them into
-        # rendering functions that the graphite renderer understands, to make
-        # graphs created by rickshaw and graphite look more similar.
-        if "color" in series_meta:
-
-
-
-
-    return get_simple_graph_url(series_list, format="json", title=title, areaMode=png_area)
+    return get_simple_graph_url(series_list, format="json", title=title)
