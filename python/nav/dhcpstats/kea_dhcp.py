@@ -139,7 +139,7 @@ class Client:
         self._session = self._create_session()
 
         local_tz_offset = datetime.now().astimezone().utcoffset().total_seconds()
-        self._start_time = time.time() + local_tz_offset
+        self._start_time = time.time() - local_tz_offset
 
         kea_config = self._fetch_kea_config()
         raw_stats = self._fetch_raw_stats()
@@ -155,7 +155,7 @@ class Client:
         self._log_consistency_with_upstream_pools(pools)
         self._log_runtime(
             start_time=self._start_time,
-            end_time=time.time() + local_tz_offset,
+            end_time=time.time() - local_tz_offset,
             n_stats=len(stats),
             n_pools=len(pools),
         )
