@@ -1545,12 +1545,13 @@ class Prefix(models.Model):
         self, *others: "Prefix"
     ) -> dict[tuple[str, str], list[tuple[IPy.IP, IPy.IP]]]:
         """
-        Fetches all IPv4 pools that are stored under 'nav.dhcp.4.pool.<any
-        servername>.<any poolname>.<any poolstart>.<any poolend>' in graphite
-        and that are intersecting this prefix or any of the prefixes in the
-        optional list of other prefixes. Returns a dict that, for each
-        intersecting pool, maps the pair (<servername>, <poolname>) to a list of
-        (<poolstart>, <poolend>) pairs.
+        Fetches all IPv4 pools that are stored under 'nav.dhcp.4.pool.
+        <any server-name>.<any pool-name>.<any range-start>.<any range-end>' in
+        graphite and that are intersecting this prefix or any of the prefixes in
+        the optional list of other prefixes. Returns a dict that, for each
+        intersecting pool, maps the pair (<server-name>, <pool-name>) to a list
+        of (<range-start>, <range-end>) pairs.
+
 
         For example, when prefix.net_address == "10.0.0.0/16",
         prefix.get_graphite_dhcp_pools() looks up in graphite and may return:
