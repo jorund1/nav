@@ -1552,13 +1552,13 @@ class Prefix(models.Model):
         intersecting pool, maps the pair (<servername>, <poolname>) to a list of
         (<poolstart>, <poolend>) pairs.
 
-        > # self = Prefix(10.0.0.0/16)
-        > self.get_graphite_dhcp_pools()
-        > {
-        >     ('server1', 'pool1'): [(10.0.0.0, 10.0.0.10), (10.0.0.20, 10.0.0.30)],
-        >     ('server1', 'pool2'): [(10.0.1.0, 10.0.1.10)],
-        >     ('server2', 'pool1'): [(10.0.2.0, 10.0.2.30)],
-        > }
+        For example, when prefix.net_address == "10.0.0.0/16",
+        prefix.get_graphite_dhcp_pools() looks up in graphite and may return:
+        {
+            ('server1', 'pool1'): [(10.0.0.0, 10.0.0.10), (10.0.0.20, 10.0.0.30)],
+            ('server1', 'pool2'): [(10.0.1.0, 10.0.1.10)],
+            ('server2', 'pool1'): [(10.0.2.0, 10.0.2.30)],
+        }
         """
 
         def unescape_address(escaped_prefix: str) -> IPy.IP:
