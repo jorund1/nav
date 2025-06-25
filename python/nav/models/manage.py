@@ -51,7 +51,7 @@ from nav.metrics.graphs import (
     nonempty_series,
     summed_series,
 )
-from nav.metrics.names import get_all_leaves_below, raw_metric_query
+from nav.metrics.names import get_all_leaves_below, get_expanded_nodes
 from nav.metrics.templates import (
     metric_prefix_for_interface,
     metric_prefix_for_ports,
@@ -1587,8 +1587,7 @@ class Prefix(models.Model):
         if len(prefix_addresses) == 0:
             return {}
 
-        response = raw_metric_query("nav.dhcp.4.pool.*.*.*.*", operation="expand")
-        graphite_paths = response.get("results", [])
+        graphite_paths = get_expanded_nodes("nav.dhcp.4.pool.*.*.*.*")
 
         if len(graphite_paths) == 0:
             return {}
@@ -1596,7 +1595,7 @@ class Prefix(models.Model):
         pool_ranges = defaultdict(list)
         intersecting_pools = set()
         for path in graphite_paths:
-            parts = path.split(".")
+            parts = str(path).split(".")
             try:
                 range_start = unescape_address(parts[6])
                 range_end = unescape_address(parts[7])
