@@ -1595,7 +1595,7 @@ class Prefix(models.Model):
         pool_ranges = defaultdict(list)
         intersecting_pools = set()
         for path in graphite_paths:
-            parts = str(path).split(".")
+            parts = path.split(".")
             try:
                 range_start = unescape_address(parts[6])
                 range_end = unescape_address(parts[7])
