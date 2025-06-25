@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from IPy import IP
 import pytest
 
 from nav.models.manage import Prefix
@@ -26,24 +27,24 @@ class TestGetGraphiteDhcpPools:
 
         expected_result = {
             ("server_1", "pool_1"): [
-                ("1.1.252.0", "1.1.252.12"),
-                ("1.1.252.64", "1.1.252.127"),
+                (IP("1.1.252.0"), IP("1.1.252.12")),
+                (IP("1.1.252.64"), IP("1.1.252.127")),
             ],
             ("server_1", "pool_2"): [
-                ("1.1.253.1", "1.1.253.8"),
-                ("1.1.254.0", "1.1.254.15"),
-                ("1.1.100.0", "1.1.101.0"),
+                (IP("1.1.253.1"), IP("1.1.253.8")),
+                (IP("1.1.254.0"), IP("1.1.254.15")),
+                (IP("1.1.100.0"), IP("1.1.101.0")),
             ],
             # ("server_1", "pool_3") is outside
             # ("server_2", "pool_1") is outside
             # ("server_2", "pool_2") is outside
-            ("server_2", "pool_3"): [("1.1.253.1", "1.1.253.8")],
-            ("server_3", "pool_1"): [("1.1.250.1", "1.1.255.1")],
-            ("server_4", "pool_1"): [("1.1.253.1", "1.1.255.1")],
-            ("server_5", "pool_1"): [("1.1.250.1", "1.1.253.1")],
+            ("server_2", "pool_3"): [(IP("1.1.253.1"), IP("1.1.253.8"))],
+            ("server_3", "pool_1"): [(IP("1.1.250.1"), IP("1.1.255.1"))],
+            ("server_4", "pool_1"): [(IP("1.1.253.1"), IP("1.1.255.1"))],
+            ("server_5", "pool_1"): [(IP("1.1.250.1"), IP("1.1.253.1"))],
         }
 
-        with patch("nav.metrics.names.raw_metric_query", return_value=pool_paths):
+        with patch("nav.models.manage.raw_metric_query", return_value=pool_paths):
             assert prefix.get_graphite_dhcp_pools() == expected_result
 
 
