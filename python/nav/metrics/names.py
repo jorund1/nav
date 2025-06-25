@@ -64,6 +64,22 @@ def get_all_leaves_below(top, ignored=None):
     return list(itertools.chain(*paths))
 
 
+def get_expanded_nodes(path):
+    """
+    Expands any wildcard in path and returns a list of all matching paths.
+
+    :param path: A graphite path (search string), e.g. "nav.{a,b}.*"
+    :returns: A list of expanded metric paths, e.g. ["nav.a.1", "nav.a.2", "nav.b.1"]
+    """
+    data = raw_metric_query(path, operation="expand")
+    if not isinstance(data, dict):
+        return []
+    result = data.get("results", [])
+    if not isinstance(result, list):
+        return []
+    return result
+
+
 def get_metric_leaf_children(path):
     """Returns a list of available graphite leaf nodes just below path.
 
