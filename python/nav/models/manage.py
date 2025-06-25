@@ -1566,13 +1566,24 @@ class Prefix(models.Model):
             parts = escaped_prefix.split("_")
             return IPy.IP(".".join(parts[:]))
 
-        prefix_addresses = IPy.IPSet(
-            [
-                ip
-                for prefix in chain((self,), others)
-                if (ip := IPy.IP(prefix.net_address)).version() == 4
-            ]
-        )
+        def intersects(
+                addresses: list[IPy.IP],
+                range_start: IPy.IP,
+                range_end: IPy.IP
+        ) -> bool:
+            for ip in addresses:
+                if (range_start in ip
+                    or range_end in ip
+                    or range_start < ip and ip < range_end):
+                    return True
+            return False
+
+        prefix_addresses = [
+            ip
+            for prefix in chain((self,), others)
+            if (ip := IPy.IP(prefix.net_address)).version() == 4
+        ]
+
         if len(prefix_addresses) == 0:
             return {}
 
@@ -1596,7 +1607,7 @@ class Prefix(models.Model):
             pool_key = (server_name, pool_name)
             pool_ranges[pool_key].append((range_start, range_end))
 
-            if range_start in prefix_addresses or range_end in prefix_addresses:
+            if intersects(prefix_addresses, range_start, range_end):
                 intersecting_pools.add(pool_key)
 
         return {pool_key: pool_ranges[pool_key] for pool_key in intersecting_pools}
