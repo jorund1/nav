@@ -18,6 +18,14 @@ Python modules with changed version requirements:
 
 * :mod:`napalm` (``>=5.1.0,<5.2.0``)
 
+Viewing DHCP stats
+------------------
+This release adds support for viewing DHCP usage/utilization graphs in the
+*Prefix* and *Vlan* detail pages in the NAV web UI.
+
+See the :doc:`DHCP stats documentation </reference/dhcpstats>` for information about DHCP stats in NAV.
+
+
 NAV 5.14
 ========
 

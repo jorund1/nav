@@ -28,12 +28,23 @@ import string
 LEGAL_METRIC_CHARACTERS = string.ascii_letters + string.digits + "-_"
 
 
+class safe_name(str):
+    def __str__(self):
+        """
+        This assures that safe_name strings aren't weakened to normal
+        strings on calls to str()
+        """
+        return self
+
+
 def escape_metric_name(name):
     """
     Escapes any character of `name` that may not be used in graphite metric
     names.
     """
     if name is None:
+        return name
+    if isinstance(name, safe_name):
         return name
     name = name.replace('\x00', '')  # some devices have crazy responses!
     name = ''.join([c if c in LEGAL_METRIC_CHARACTERS else "_" for c in name])
@@ -62,6 +73,24 @@ def get_all_leaves_below(top, ignored=None):
     walker = nodewalk(top, ignored)
     paths = (leaves for (name, nonleaves, leaves) in walker)
     return list(itertools.chain(*paths))
+
+
+def get_expanded_nodes(path):
+    """
+    Expands any wildcard in path and returns a list of all matching paths.
+
+    :param path: A graphite path (search string) or list of search strings,
+                 e.g. ["nav.{a,b}.*", "nav.{c}.*.*"]
+    :returns: A list of expanded metric paths,
+              e.g. ["nav.a.1", "nav.a.2", "nav.b.1", "nav.c.1.1"]
+    """
+    data = raw_metric_query(path, operation="expand")
+    if not isinstance(data, dict):
+        return []
+    result = data.get("results", [])
+    if not isinstance(result, list):
+        return []
+    return result
 
 
 def get_metric_leaf_children(path):
@@ -119,16 +148,17 @@ def nodewalk(top, ignored=None):
             yield x
 
 
-def raw_metric_query(query):
+def raw_metric_query(query, operation="find"):
     """Runs a query for metric information against Graphite's REST API.
 
-    :param query: A search string, e.g. "nav.devices.some-gw_example_org.*"
+    :param query: A search string or list of search strings,
+                  e.g. "nav.devices.some-gw_example_org.*"
     :returns: A list of matching metrics, each represented by a dict.
 
     """
     base = CONFIG.get("graphiteweb", "base")
-    url = urljoin(base, "/metrics/find")
-    query = urlencode({'query': query})
+    url = urljoin(base, "/metrics/" + operation)
+    query = urlencode({'query': query}, doseq=True)
     url = "%s?%s" % (url, query)
 
     req = Request(url)
