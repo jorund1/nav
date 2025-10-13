@@ -18,6 +18,62 @@ Python modules with changed version requirements:
 
 * :mod:`napalm` (``>=5.1.0,<5.2.0``)
 
+Viewing DHCP stats
+------------------
+This release adds support for viewing DHCP usage/utilization graphs in the
+*Prefix* and *Vlan* detail pages in the NAV web UI.
+
+See the :doc:`DHCP stats documentation </reference/dhcpstats>` for information about DHCP stats in NAV.
+
+.. warning::
+   NAV 5.14 previously added support for collecting DHCP stats to the
+   ``nav.dhcp`` tree in Graphite. This NAV version changes how stats are stored
+   in ``nav.dhcp``, and thus, if you've already started collecting DHCP stats to
+   ``nav.dhcp`` during NAV 5.14 (by following the instructions given in that
+   version's release notes), and if you don't want these stats to be ignored by
+   NAV 5.15 and future versions, you must manually rename the paths under
+   ``nav.dhcp`` to match the way paths are named in NAV 5.15 version before upgrading:
+
+   .. code-block:: bash
+
+     #!/bin/bash
+
+     # Renames the paths under nav.dhcp to match the way paths are named in NAV 5.15
+
+     # $WHISPER_ROOT should point to the root of the whisper database's file tree The
+     # user running this script must have write-access to this file tree
+     WHISPER_ROOT="/var/lib/graphite/whisper"
+
+     pushd "$WHISPER_ROOT" 1>/dev/null 2>/dev/null || exit 1
+     for path in nav/dhcp/*/pool/*/*/*/*/*; do
+         if ! [[ -f "$path" ]]; then
+             continue
+         fi
+         if [[ -h "$path" ]]; then
+             continue
+         fi
+         IFS='/' read -ra parts <<< "$path"
+         ip_version="${parts[2]}"
+         server_name="${parts[4]}"
+         group_name="${parts[5]}"
+         first_ip="${parts[6]}"
+         last_ip="${parts[7]}"
+         metric_name="${parts[8]}"
+         if [[ "$group_name" = "pool-${first_ip}-${last_ip}" ]]; then
+             new_path="nav/dhcp/${ip_version}/${server_name}/range/special_groups/standalone/${first_ip}/${last_ip}/${metric_name}"
+             new_dir="nav/dhcp/${ip_version}/${server_name}/range/special_groups/standalone/${first_ip}/${last_ip}/"
+         else
+             new_path="nav/dhcp/${ip_version}/${server_name}/range/custom_groups/${group_name}/${first_ip}/${last_ip}/${metric_name}"
+             new_dir="nav/dhcp/${ip_version}/${server_name}/range/custom_groups/${group_name}/${first_ip}/${last_ip}/"
+         fi
+         mkdir -p "$new_dir"
+         ln --verbose "$WHISPER_ROOT/$path" "$WHISPER_ROOT/$new_path"
+         # unlink "$WHISPER_ROOT/$path"  # Unlinks old path
+     done
+     # find "$WHISPER_ROOT/nav/dhcp" -depth -empty -type d -delete  # Removes empty directories
+     popd 1>/dev/null 2>/dev/null || true
+
+
 NAV 5.14
 ========
 
