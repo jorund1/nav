@@ -9,6 +9,7 @@ Tested with dhcpd-pools 2.29.
 import argparse
 from binascii import hexlify
 from collections import namedtuple
+from functools import partial
 import json
 from math import trunc
 import pathlib
@@ -150,15 +151,32 @@ def get_graphite_metrics(jsonblob, args):
     timestamp = trunc(time())
     data = jsonblob["subnets"]
     output = list()
-    for subnet_stat in data:
-        network = subnet_stat["location"]
-        first_ip, last_ip = map(str.strip, subnet_stat["range"].split("-"))
+    for range_data in data:
+        first_ip, last_ip = map(str.strip, range_data["range"].split("-"))
+        if not len(first_ip.split(".")) == len(last_ip.split(".")) == 4:
+            # we only care about IPv4 stats
+            continue
+
+        shared_network = range_data["location"]
+        if shared_network == "All networks":
+            # this range *is not* contained in a shared network and thus *has no* group name
+            path_tmpl = "{prefix}.dhcp.4.{server_name}.range.special_groups.standalone.{first_ip}.{last_ip}.{metric}"
+        else:
+            # this range *is* contained in a shared network and thus *has* a group name (its network name)
+            path_tmpl = "{prefix}.dhcp.4.{server_name}.range.custom_groups.{group_name}.{first_ip}.{last_ip}.{metric}"
+        make_path = partial(
+            str.format,
+            path_tmpl,
+            prefix=escape_metric_name(args.prefix),
+            server_name=escape_metric_name(args.server_name),
+            first_ip=escape_metric_name(first_ip),
+            last_ip=escape_metric_name(last_ip),
+            group_name=escape_metric_name(shared_network),
+        )
+
         for key, metric in METRIC_MAPPER.items():
-            if network == "All networks":
-                path = f"{args.prefix}.dhcp.4.{args.server_name}.range.special_groups.standalone.{first_ip}.{last_ip}.{metric}"
-            else:
-                path = f"{args.prefix}.dhcp.4.{args.server_name}.range.custom_groups.{network}.{first_ip}.{last_ip}.{metric}"
-            value = subnet_stat[key]
+            path = make_path(metric=metric)
+            value = range_data[key]
             output.append(Metric(path, value, timestamp))
     return output
 
