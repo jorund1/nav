@@ -120,26 +120,24 @@ def exec_dhcpd_pools(args):
 
 
 # reformat the data
-def render(jsonblob, args):
+def render(metrics, args):
     if isinstance(args.protocol, int):
-        return _render_pickle(jsonblob, args)
-    return _render_text(jsonblob, args)
+        return _render_pickle(metrics, args)
+    return _render_text(metrics, args)
 
 
-def _render_text(jsonblob, args):
+def _render_text(metrics, args):
     template = "{metric.path} {metric.value} {metric.timestamp}\n"
-    input = _tuplify(jsonblob, args)
     output = []
-    for metric in input:
+    for metric in metrics:
         line = template.format(metric=metric)
         output.append(line)
     return "".join(output).encode("ascii")
 
 
-def _render_pickle(jsonblob, args):
-    input = _tuplify(jsonblob, args)
+def _render_pickle(metrics, args):
     output = []
-    for metric in input:
+    for metric in metrics:
         output.append((metric.path, (metric.timestamp, metric.value)))
     payload = pickle.dumps(output, protocol=args.protocol)
     header = struct.pack("!L", len(payload))
@@ -189,7 +187,8 @@ def send_to_graphite(metrics_blob, server, port):
 def main():
     args = parse_args()
     jsonblob = exec_dhcpd_pools(args)
-    output = render(jsonblob, args)
+    metrics = _tuplify(jsonblob, args)
+    output = render(metrics, args)
     if args.noop:
         if args.protocol == "text":
             print(output.decode('ascii'))
