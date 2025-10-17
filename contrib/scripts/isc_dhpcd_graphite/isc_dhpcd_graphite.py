@@ -27,7 +27,6 @@ DEFAULT_PROTOCOL = 'text'  # MB doesn't trust pickle so we go with text
 
 # graphite likes pickle protocol 2. Python 3: 3, Python 3.8+: 4
 PICKLE_PROTOCOL = range(0, pickle.HIGHEST_PROTOCOL + 1)
-FLAGS = "-f j"
 
 # maps metric names used by dhcpd-pools to those used in NAV
 METRIC_MAPPER = {
@@ -111,24 +110,22 @@ def parse_args():
     return args
 
 
-# run command and store json output
-def exec_dhcpd_pools(args):
-    flags = f"-c {args.config_file} {FLAGS}".split()
+def get_dhcpd_pools_json(args):
+    flags = f"-c {args.config_file} -f j".split()
     cmd = [args.command] + list(flags)
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode:
         sys.exit(result.stderr)
     return json.loads(result.stdout)
 
-
-# reformat the data
-def render(metrics, args):
+# turn a list of metric tuples into a payload that can be sent over wire to graphite
+def make_payload(metrics, args):
     if isinstance(args.protocol, int):
-        return _render_pickle(metrics, args)
-    return _render_text(metrics, args)
+        return make_pickle_payload(metrics, args)
+    return make_text_payload(metrics, args)
 
 
-def _render_text(metrics, args):
+def make_text_payload(metrics, args):
     template = "{metric.path} {metric.value} {metric.timestamp}\n"
     output = []
     for metric in metrics:
@@ -137,7 +134,7 @@ def _render_text(metrics, args):
     return "".join(output).encode("ascii")
 
 
-def _render_pickle(metrics, args):
+def make_pickle_payload(metrics, args):
     output = []
     for metric in metrics:
         output.append((metric.path, (metric.timestamp, metric.value)))
@@ -147,7 +144,7 @@ def _render_pickle(metrics, args):
     return message
 
 
-def _tuplify(jsonblob, args):
+def get_graphite_metrics(jsonblob, args):
     prefix = args.prefix
     timestamp = trunc(time())
     data = jsonblob["subnets"]
@@ -165,7 +162,7 @@ def _tuplify(jsonblob, args):
     return output
 
 
-def _escape_metric_name(name):
+def escape_metric_name(name):
     """
     Escapes any character of `name` that may not be used in graphite metric
     names.
@@ -176,14 +173,14 @@ def _escape_metric_name(name):
 
 
 # send the data
-def send_to_graphite(metrics_blob, server, port):
+def send_to_graphite(payload, server, port):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.connect((server, port))
     except socket.error as e:
         sys.exit(str(e))
     try:
-        sock.sendall(metrics_blob)
+        sock.sendall(payload)
     except socket.error as e:
         sys.exit(str(e))
     finally:
@@ -192,16 +189,16 @@ def send_to_graphite(metrics_blob, server, port):
 
 def main():
     args = parse_args()
-    jsonblob = exec_dhcpd_pools(args)
-    metrics = _tuplify(jsonblob, args)
-    output = render(metrics, args)
+    dhcpd_json = get_dhcpd_pools_json(args)
+    metrics = get_graphite_metrics(dhcpd_json, args)
+    payload = make_payload(metrics, args)
     if args.noop:
         if args.protocol == "text":
-            print(output.decode('ascii'))
+            print(payload.decode('ascii'))
         else:
-            print(hexlify(output).decode('ascii'))
+            print(hexlify(payload).decode('ascii'))
     else:
-        send_to_graphite(output, args.address, args.port)
+        send_to_graphite(payload, args.address, args.port)
 
 
 if __name__ == "__main__":
