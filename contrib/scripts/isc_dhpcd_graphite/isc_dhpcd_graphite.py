@@ -117,7 +117,7 @@ def get_dhcpd_pools_json(args):
     cmd = [args.command, "-c", args.config_file, "-f", "j"]
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode:
-        sys.exit(result.stderr)
+        sys.exit(result.returncode)
     return json.loads(result.stdout)
 
 # turn a list of metric tuples into a payload that can be sent over wire to graphite
