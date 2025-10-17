@@ -78,12 +78,12 @@ NAV records the following information for each range/pool/subnet:
    The information above is stored as part of each stat's Graphite/Carbon path.
    Thus keep in mind that both server names and group names must consist
    exclusively of english letters, digits, underscores, and hyphens as per usual
-   in Graphite/Carbon (other characters may be replaced with an arbitrary
-   conforming character or removed).
+   in Graphite/Carbon. (Other characters may be replaced with an arbitrary
+   conforming character or removed.)
 
 Using this information, NAV has no problem discerning between stats originating
-from e.g. separate private ranges/pools/subnets having the same IP addresses as
-long as either
+from different ranges/pools/subnets having the same (usually private) IP
+addresses as long as either
 
 * the ranges/pools/subnets each originate from different DHCP servers, or
 * the ranges/pools/subnets each belong to different groups.
@@ -101,9 +101,10 @@ Server names
   doesn't get intermingled.
 
   They are usually set in the *dhcpstats.conf* NAV configuration file along with
-  other per-server options; the sole exception to this is for standalone scripts
-  meant to run on the DHCP server itself and not by NAV. In this latter case,
-  server names are usually given as a command-line argument to the script.
+  other per-server-instance options; the sole exception to this is for
+  standalone scripts meant to run on the DHCP server itself and not by NAV. In
+  this latter case, server names are usually given as a command-line argument to
+  the script.
 
 .. _dhcpstats_group_name_definition:
 Group names
@@ -153,6 +154,8 @@ Group names
 
 Where can I see the stats in NAV?
 ---------------------------------
+
+.. image:: ./prefix-dhcpstats-example.png
 
 Any recently enough collected DHCP stats are displayed on two types of pages in
 NAV you're probably familiar with:

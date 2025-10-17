@@ -57,7 +57,7 @@ def fetch_graph_urls_for_prefixes(prefixes: list[IPy.IP]):
                 nonempty_series(
                     path.to_graphite_path("assigned"),
                 ),
-                name=f"Assigned to {path.first_ip} - {path.last_ip}",
+                name=f"Assigned addresses in {path.first_ip} - {path.last_ip}",
                 renderer="area",
             )
             graph_lines.append(assigned_addresses)
@@ -77,7 +77,7 @@ def fetch_graph_urls_for_prefixes(prefixes: list[IPy.IP]):
                     ),
                 ),
             ),
-            name="Unassigned",
+            name="Unassigned addresses",
             renderer="area",
             color="#d9d9d9",
         )
@@ -89,13 +89,13 @@ def fetch_graph_urls_for_prefixes(prefixes: list[IPy.IP]):
                     path.to_graphite_path("total", wildcard_for_group=True)
                 ),
             ),
-            name="Total available",
-            color="#ff8000",
+            name="Total addresses",
+            color="#707070",
         )
         graph_lines.append(total_addresses)
 
         type_human = path.allocation_type + "s"
-        title = f"IP Addresses assigned to {type_human} in {path.group_name!r} on DHCP server {path.server_name!r}"
+        title = f"DHCP {type_human} in {path.group_name!r} on server {path.server_name!r}"
         graph_urls.append(json_graph_url(*graph_lines, title=title))
     return graph_urls
 
