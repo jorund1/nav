@@ -111,8 +111,7 @@ def parse_args():
 
 
 def get_dhcpd_pools_json(args):
-    flags = f"-c {args.config_file} -f j".split()
-    cmd = [args.command] + list(flags)
+    cmd = [args.command, "-c", args.config_file, "-f", "j"]
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode:
         sys.exit(result.stderr)
