@@ -13,6 +13,7 @@ import pathlib
 import pickle
 import re
 import socket
+import string
 import struct
 import subprocess
 import sys
@@ -27,11 +28,12 @@ DEFAULT_PROTOCOL = 'text'  # MB doesn't trust pickle so we go with text
 # graphite likes pickle protocol 2. Python 3: 3, Python 3.8+: 4
 PICKLE_PROTOCOL = range(0, pickle.HIGHEST_PROTOCOL + 1)
 FLAGS = "-f j"
+
+# maps metric names used by dhcpd-pools to those used in NAV
 METRIC_MAPPER = {
-    "defined": "max",
-    "used": "cur",
-    "touched": "touch",
-    "free": "free",
+    "defined": "total",
+    "used": "assigned",
+    "touched": "declined",
 }
 
 
@@ -148,25 +150,29 @@ def _render_pickle(metrics, args):
 def _tuplify(jsonblob, args):
     prefix = args.prefix
     timestamp = trunc(time())
-    data = jsonblob["shared-networks"]
+    data = jsonblob["subnets"]
     output = list()
-    for vlan_stat in data:
-        vlan = _clean_vlan(vlan_stat["location"])
-        if not vlan:
-            continue
+    for subnet_stat in data:
+        network = subnet_stat["location"]
+        first_ip, last_ip = map(str.strip, subnet_stat["range"].split("-"))
         for key, metric in METRIC_MAPPER.items():
-            path = f"{prefix}.{vlan}.{metric}"
-            value = vlan_stat[key]
+            if network == "All networks":
+                path = f"{args.prefix}.dhcp.4.{args.server_name}.range.special_groups.standalone.{first_ip}.{last_ip}.{metric}"
+            else:
+                path = f"{args.prefix}.dhcp.4.{args.server_name}.range.custom_groups.{network}.{first_ip}.{last_ip}.{metric}"
+            value = subnet_stat[key]
             output.append(Metric(path, value, timestamp))
     return output
 
 
-def _clean_vlan(location):
-    regex = re.search("vlan\d+", location)
-    if regex:
-        return regex.group()
-    sys.stderr.write(f"No vlan found in location {location}: invalid\n")
-    return None
+def _escape_metric_name(name):
+    """
+    Escapes any character of `name` that may not be used in graphite metric
+    names.
+    """
+    legal_metric_characters = string.ascii_letters + string.digits + "-_"
+    name = ''.join([c if c in legal_metric_characters else "_" for c in name])
+    return name
 
 
 # send the data
