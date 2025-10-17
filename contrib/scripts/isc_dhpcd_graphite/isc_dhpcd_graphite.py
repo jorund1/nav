@@ -110,9 +110,9 @@ def parse_args():
 
 
 # run command and store json output
-def exec_dhcpd_pools(config_file, cmd_path=DEFAULT_CMD_PATH):
-    flags = f"-c {config_file} {FLAGS}".split()
-    cmd = [cmd_path] + list(flags)
+def exec_dhcpd_pools(args):
+    flags = f"-c {args.config_file} {FLAGS}".split()
+    cmd = [args.command] + list(flags)
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode:
         sys.exit(result.stderr)
@@ -120,15 +120,15 @@ def exec_dhcpd_pools(config_file, cmd_path=DEFAULT_CMD_PATH):
 
 
 # reformat the data
-def render(jsonblob, prefix, protocol=DEFAULT_PROTOCOL):
-    if isinstance(protocol, int):
-        return _render_pickle(jsonblob, prefix, protocol)
-    return _render_text(jsonblob, prefix)
+def render(jsonblob, args):
+    if isinstance(args.protocol, int):
+        return _render_pickle(jsonblob, args)
+    return _render_text(jsonblob, args)
 
 
-def _render_text(jsonblob, prefix):
+def _render_text(jsonblob, args):
     template = "{metric.path} {metric.value} {metric.timestamp}\n"
-    input = _tuplify(jsonblob, prefix)
+    input = _tuplify(jsonblob, args)
     output = []
     for metric in input:
         line = template.format(metric=metric)
@@ -136,18 +136,19 @@ def _render_text(jsonblob, prefix):
     return "".join(output).encode("ascii")
 
 
-def _render_pickle(jsonblob, prefix, protocol):
-    input = _tuplify(jsonblob, prefix)
+def _render_pickle(jsonblob, args):
+    input = _tuplify(jsonblob, args)
     output = []
     for metric in input:
         output.append((metric.path, (metric.timestamp, metric.value)))
-    payload = pickle.dumps(output, protocol=protocol)
+    payload = pickle.dumps(output, protocol=args.protocol)
     header = struct.pack("!L", len(payload))
     message = header + payload
     return message
 
 
-def _tuplify(jsonblob, prefix):
+def _tuplify(jsonblob, args):
+    prefix = args.prefix
     timestamp = trunc(time())
     data = jsonblob["shared-networks"]
     output = list()
@@ -187,8 +188,8 @@ def send_to_graphite(metrics_blob, server, port):
 
 def main():
     args = parse_args()
-    jsonblob = exec_dhcpd_pools(args.config_file, args.command)
-    output = render(jsonblob, args.actual_prefix, args.protocol)
+    jsonblob = exec_dhcpd_pools(args)
+    output = render(jsonblob, args)
     if args.noop:
         if args.protocol == "text":
             print(output.decode('ascii'))
