@@ -18,7 +18,7 @@ import subprocess
 import sys
 from time import time
 
-DEFAULT_PREFIX = "nav.dhcp"
+DEFAULT_PREFIX = "nav"
 DEFAULT_CONFIG_FILE = "/etc/dhcpd/dhcpd.conf"
 DEFAULT_CMD_PATH = pathlib.Path("/usr/bin/dhcpd-pools")
 DEFAULT_PORT = "2004"
@@ -42,7 +42,7 @@ Metric = namedtuple("Metric", ["path", "value", "timestamp"])
 def parse_args():
     parser = argparse.ArgumentParser(description="Send dhcp stats to graphite")
     parser.add_argument(
-        "server",
+        "address",
         help="Graphite server to send data to",
         type=str,
     )
@@ -68,19 +68,16 @@ def parse_args():
     parser.add_argument(
         "-p",
         "--prefix",
-        help="Path prefix to use for the metric, overriding the default. Default: %(default)s",
+        help="Name of first segment to be used in graphite paths. Default: %(default)s",
         type=str,
         default=DEFAULT_PREFIX,
     )
     parser.add_argument(
-        "-l",
-        "--location",
-        help=(
-            "Location, if any, to append to the metric prefix to build the path."
-            ' If the vlan is named "vlan1" and the location is "building1.cellar"'
-            " the resulting metric path would be PREFIX.building1.cellar.vlan1"
-        ),
+        "-s",
+        "--server-name",
+        help="A unique nickname for the dhcpd server, e.g. 'dhcpd-oslo'. To be used in graphite paths.",
         type=str,
+        required=True,
     )
     protocol_choices = ("text",) + tuple(str(p) for p in PICKLE_PROTOCOL)
     parser.add_argument(
@@ -109,9 +106,6 @@ def parse_args():
             args.port = "2004"
         else:
             args.port = "2003"
-    args.actual_prefix = args.prefix
-    if args.location:
-        args.actual_prefix += f".{args.location}"
     return args
 
 
@@ -201,7 +195,7 @@ def main():
         else:
             print(hexlify(output).decode('ascii'))
     else:
-        send_to_graphite(output, args.server, args.port)
+        send_to_graphite(output, args.address, args.port)
 
 
 if __name__ == "__main__":
