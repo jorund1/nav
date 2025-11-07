@@ -11,6 +11,7 @@ from binascii import hexlify
 from collections import namedtuple
 from functools import partial
 import json
+import logging
 from math import trunc
 import pathlib
 import pickle
@@ -21,6 +22,9 @@ import struct
 import subprocess
 import sys
 from time import time
+
+LOG_FORMAT = "%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
+_logger = logging.getLogger(__name__)
 
 DEFAULT_PREFIX = "nav"
 DEFAULT_CONFIG_FILE = "/etc/dhcpd/dhcpd.conf"
@@ -154,7 +158,10 @@ def get_graphite_metrics(jsonblob, args):
     for range_data in data:
         first_ip, last_ip = map(str.strip, range_data["range"].split("-"))
         if not len(first_ip.split(".")) == len(last_ip.split(".")) == 4:
-            # we only care about IPv4 stats
+            _logger.info(
+                f"Range {range_data!r} is not IPv4, skipping this range's "
+                "stats...",
+            )
             continue
 
         shared_network = range_data["location"]
@@ -205,9 +212,15 @@ def send_to_graphite(payload, server, port):
     finally:
         sock.close()
 
+def init_logging(log_level):
+    tty_handler = logging.StreamHandler()
+    tty_handler.setLevel(log_level)
+    tty_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    _logger.addHandler(tty_handler)
 
 def main():
     args = parse_args()
+    init_logging(args.log_level)
     dhcpd_json = get_dhcpd_pools_json(args)
     metrics = get_graphite_metrics(dhcpd_json, args)
     payload = make_payload(metrics, args)
