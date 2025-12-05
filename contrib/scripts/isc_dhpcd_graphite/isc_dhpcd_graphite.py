@@ -167,9 +167,11 @@ def get_graphite_metrics(jsonblob, args):
         shared_network = range_data["location"]
         if shared_network == "All networks":
             # this range *is not* contained in a shared network and thus *has no* group name
+            # TODO: path_tmpl = "{prefix}.dhcp.4.range.{server_name}.special_groups.standalone.{first_ip}.{last_ip}.{metric}"
             path_tmpl = "{prefix}.dhcp.4.{server_name}.range.special_groups.standalone.{first_ip}.{last_ip}.{metric}"
         else:
             # this range *is* contained in a shared network and thus *has* a group name (its network name)
+            # TODO: path_tmpl = "{prefix}.dhcp.4.range.{server_name}.custom_groups.{group_name}.{first_ip}.{last_ip}.{metric}"
             path_tmpl = "{prefix}.dhcp.4.{server_name}.range.custom_groups.{group_name}.{first_ip}.{last_ip}.{metric}"
         make_path = partial(
             str.format,
