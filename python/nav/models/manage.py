@@ -1465,13 +1465,13 @@ class Prefix(models.Model):
     def get_graph_url(self):
         """Creates the graph url used for graphing this prefix"""
         path = partial(metric_path_for_prefix, self.net_address)
-        ip_count = 'alias({0}, "IP addresses ")'.format(path('ip_count'))
-        ip_range = 'alias({0}, "Max addresses")'.format(path('ip_range'))
-        mac_count = 'alias({0}, "MAC addresses")'.format(path('mac_count'))
+        ip_count = aliased_series(path('ip_count'), name="IP addresses")
+        ip_range = aliased_series(path('ip_range'), name="Max addresses")
+        mac_count = aliased_series(path('mac_count'), name="MAC addresses")
         metrics = [ip_count, mac_count]
         if IPy.IP(self.net_address).version() == 4:
             metrics.append(ip_range)
-        return get_simple_graph_url(metrics, title=str(self), format='json')
+        return json_graph_url(*metrics, title=str(self))
 
     def get_absolute_url(self):
         return reverse('prefix-details', args=[self.pk])
