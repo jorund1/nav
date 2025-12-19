@@ -41,7 +41,13 @@ from django.urls import reverse
 from nav import util
 from nav.bitvector import BitVector
 from nav.metrics.data import get_netboxes_availability
-from nav.metrics.graphs import get_simple_graph_url, Graph
+from nav.metrics.graphs import (
+    aliased_series,
+    get_simple_graph_url,
+    Graph,
+    json_graph_url,
+    summed_series,
+)
 from nav.metrics.names import get_all_leaves_below
 from nav.metrics.templates import (
     metric_prefix_for_interface,
@@ -1553,30 +1559,29 @@ class Vlan(models.Model):
         # Put metainformation in the alias so that Rickshaw can pick it up and
         # know how to draw the series.
         series = [
-            "alias({}, 'renderer=area;;{}')".format(
+            aliased_series(
                 metric_path_for_prefix(prefix.net_address, 'ip_count'),
-                prefix.net_address,
+                name=prefix.net_address,
+                renderer="area",
             )
             for prefix in prefixes
         ]
-        if series:
-            if family == 4:
-                series.append(
-                    "alias(sumSeries(%s), 'Max addresses')"
-                    % ",".join(
-                        [
-                            metric_path_for_prefix(prefix.net_address, 'ip_range')
-                            for prefix in prefixes
-                        ]
-                    )
-                )
-            return get_simple_graph_url(
-                series,
-                title="Total IPv{} addresses on vlan {} - stacked".format(
-                    family, str(self)
-                ),
-                format='json',
+
+        if not series:
+            return
+
+        if family == 4:
+            ip_ranges = [
+                metric_path_for_prefix(prefix.net_address, 'ip_range')
+                for prefix in prefixes
+            ]
+            series.append(
+                aliased_series(summed_series(*ip_ranges), name="Max addresses"),
             )
+
+        title = f"Total IPv{family} addresses on vlan {self} - stacked"
+
+        return json_graph_url(*series, title=title)
 
     def get_dhcp_graph_urls(self):
         """
