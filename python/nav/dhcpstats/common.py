@@ -284,6 +284,7 @@ class DhcpPath:
 
         if first_ip cannot be parsed to an IP address, raises a ValueError
         if last_ip cannot be parsed to an IP address, raises a ValueError
+        if first_ip and last_ip does not have the same IP version, raises a ValueError
         if first_ip > last_ip, raises a ValueError
         otherwise, returns the Path instance.
         """
@@ -294,8 +295,8 @@ class DhcpPath:
             group_name_source = "custom_groups"
             group_name = group_name
 
-        first_ip = IPy.IP(IPy.IP(first_ip)[0])
-        last_ip = IPy.IP(IPy.IP(last_ip)[-1])
+        first_ip = IPy.IP(first_ip)
+        last_ip = IPy.IP(last_ip)
         cls._check_ip_pair(first_ip, last_ip)
 
         return cls(
@@ -356,6 +357,12 @@ class DhcpPath:
 
     @staticmethod
     def _check_ip_pair(first_ip: IPy.IP, last_ip: IPy.IP):
+        if len(first_ip) != 1:
+            raise ValueError(f"first_ip {first_ip!r} must be an IP address")
+
+        if len(last_ip) != 1:
+            raise ValueError(f"last_ip {last_ip!r} must be an IP address")
+
         if first_ip.version() != last_ip.version():
             raise ValueError(f"first_ip {first_ip!r} is not of same version as last_ip {last_ip!r}")
 
