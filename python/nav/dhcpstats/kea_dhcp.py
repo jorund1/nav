@@ -441,13 +441,25 @@ class Client:
         raw_stats is a dictionary representing the result of the Kea API command
         'statistic-get-all'.
         """
-        path_prefix = DhcpPath.from_external_info(
-            server_name=self._server_name,
-            allocation_type="range",
-            group_name=pool.group_name,
-            first_ip=pool.first_ip,
-            last_ip=pool.last_ip,
-        )
+        try:
+            path_prefix = DhcpPath.from_external_info(
+                server_name=self._server_name,
+                allocation_type="range",
+                group_name=pool.group_name,
+                first_ip=pool.first_ip,
+                last_ip=pool.last_ip,
+            )
+        except ValueError as err:
+            _logger.error(
+                "Error when creating graphite path for Kea pool having range '%s-%s' "
+                "and name '%s': %s",
+                pool.first_ip,
+                pool.last_ip,
+                pool.group_name,
+                err,
+            )
+            return
+
         for nav_stat_name, api_stat_name in self._api_namings:
             statistic = f"subnet[{pool.subnet_id}].pool[{pool.pool_id}].{api_stat_name}"
             samples = raw_stats.get(statistic, [])
