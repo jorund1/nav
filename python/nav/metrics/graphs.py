@@ -393,6 +393,11 @@ def nonempty_series(series_list: str, x_files_factor: float = 0.0) -> str:
     """
     Out of all metrics in series_list, draw only the metrics with not
     empty data.
+
+    (A rule of thumb is to use this function if you're dealing with transient
+    metrics, so that they only will be shown in the requested timeframes where
+    they matter.)
+
     https://graphite.readthedocs.io/en/latest/functions.html#graphite.render.functions.removeEmptySeries
     """
     tmpl = "removeEmptySeries({series_list}, {x_files_factor})"
