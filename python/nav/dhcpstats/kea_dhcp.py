@@ -60,6 +60,16 @@ class Pool:
     first_ip: IP
     last_ip: IP
 
+    def __str__(self):
+        if self.group_name is None:
+            group_subsentence = ""
+        else:
+            group_subsentence = f" and in group '{self.group_name}'"
+        return (
+            f"Kea pool {self.pool_id} from {self.first_ip} to {self.last_ip} "
+            f"in Kea subnet {self.subnet_id}{group_subsentence}"
+        )
+
 
 class Client:
     """
@@ -119,8 +129,8 @@ class Client:
 
     def __str__(self):
         return (
-            f"client for Kea DHCPv{self._dhcp_version} server '{self._server_name}' at "
-            f"{self._url}"
+            f"API client for Kea DHCPv{self._dhcp_version} server '{self._server_name}' "
+            f"at {self._url}"
         )
 
     def fetch_stats(self) -> list[GraphiteMetric]:
@@ -451,11 +461,8 @@ class Client:
             )
         except ValueError as err:
             _logger.error(
-                "Error when creating graphite path for Kea pool having range '%s-%s' "
-                "and name '%s': %s",
-                pool.first_ip,
-                pool.last_ip,
-                pool.group_name,
+                "Error when creating graphite path for %s: %s",
+                pool,
                 err,
             )
             return
