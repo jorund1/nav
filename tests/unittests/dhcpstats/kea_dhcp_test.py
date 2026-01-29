@@ -726,6 +726,10 @@ def valid_dhcp4():
             ("2025-05-30 05:49:49.467993", 10),
         ),
         (
+            f"nav.dhcp.servers.{SERVER_NICKNAME}.range.custom_groups.bergen-staff.4.42_0_1_1.42_0_1_10.unassigned",
+            ("2025-05-30 05:49:49.467993", 8),
+        ),
+        (
             f"nav.dhcp.servers.{SERVER_NICKNAME}.range.custom_groups.bergen-student.4.42_0_2_1.42_0_2_10.assigned",
             ("2025-05-30 05:49:49.467993", 0),
         ),
@@ -735,6 +739,10 @@ def valid_dhcp4():
         ),
         (
             f"nav.dhcp.servers.{SERVER_NICKNAME}.range.custom_groups.bergen-student.4.42_0_2_1.42_0_2_10.total",
+            ("2025-05-30 05:49:49.467993", 10),
+        ),
+        (
+            f"nav.dhcp.servers.{SERVER_NICKNAME}.range.custom_groups.bergen-student.4.42_0_2_1.42_0_2_10.unassigned",
             ("2025-05-30 05:49:49.467993", 10),
         ),
         (
@@ -750,6 +758,10 @@ def valid_dhcp4():
             ("2025-05-30 05:49:49.467993", 128),
         ),
         (
+            f"nav.dhcp.servers.{SERVER_NICKNAME}.range.custom_groups.bergen-student.4.42_0_2_128.42_0_2_255.unassigned",
+            ("2025-05-30 05:49:49.467993", 127),
+        ),
+        (
             f"nav.dhcp.servers.{SERVER_NICKNAME}.range.custom_groups.bergen-student.4.42_0_2_32.42_0_2_47.assigned",
             ("2025-05-30 05:49:49.467993", 0),
         ),
@@ -762,6 +774,10 @@ def valid_dhcp4():
             ("2025-05-30 05:49:49.467993", 16),
         ),
         (
+            f"nav.dhcp.servers.{SERVER_NICKNAME}.range.custom_groups.bergen-student.4.42_0_2_32.42_0_2_47.unassigned",
+            ("2025-05-30 05:49:49.467993", 16),
+        ),
+        (
             f"nav.dhcp.servers.{SERVER_NICKNAME}.range.custom_groups.oslo-student.4.42_0_3_1.42_0_3_10.assigned",
             ("2025-05-30 05:49:49.467993", 0),
         ),
@@ -771,6 +787,10 @@ def valid_dhcp4():
         ),
         (
             f"nav.dhcp.servers.{SERVER_NICKNAME}.range.custom_groups.oslo-student.4.42_0_3_1.42_0_3_10.total",
+            ("2025-05-30 05:49:49.467993", 10),
+        ),
+        (
+            f"nav.dhcp.servers.{SERVER_NICKNAME}.range.custom_groups.oslo-student.4.42_0_3_1.42_0_3_10.unassigned",
             ("2025-05-30 05:49:49.467993", 10),
         ),
         (
@@ -789,6 +809,11 @@ def valid_dhcp4():
             ("2025-05-30 05:49:49.467993", 5),
         ),
         (
+            # From Kea pool with 'group': 'oslo-staff' in 'user-context'
+            f"nav.dhcp.servers.{SERVER_NICKNAME}.range.custom_groups.oslo-staff.4.42_0_4_1.42_0_4_5.unassigned",
+            ("2025-05-30 05:49:49.467993", 5),
+        ),
+        (
             # From Kea pool without 'user-context'
             f"nav.dhcp.servers.{SERVER_NICKNAME}.range.special_groups.standalone.4.42_0_5_1.42_0_5_5.assigned",
             ("2025-05-30 05:49:49.467993", 0),
@@ -804,6 +829,11 @@ def valid_dhcp4():
             ("2025-05-30 05:49:49.467993", 5),
         ),
         (
+            # From Kea pool without 'user-context'
+            f"nav.dhcp.servers.{SERVER_NICKNAME}.range.special_groups.standalone.4.42_0_5_1.42_0_5_5.unassigned",
+            ("2025-05-30 05:49:49.467993", 5),
+        ),
+        (
             # From Kea pool with 'user-context' but without 'group' in 'user-context'
             f"nav.dhcp.servers.{SERVER_NICKNAME}.range.special_groups.standalone.4.42_0_6_1.42_0_6_5.assigned",
             ("2025-05-30 05:49:49.467993", 0),
@@ -816,6 +846,11 @@ def valid_dhcp4():
         (
             # From Kea pool with 'user-context' but without 'group' in 'user-context'
             f"nav.dhcp.servers.{SERVER_NICKNAME}.range.special_groups.standalone.4.42_0_6_1.42_0_6_5.total",
+            ("2025-05-30 05:49:49.467993", 5),
+        ),
+        (
+            # From Kea pool with 'user-context' but without 'group' in 'user-context'
+            f"nav.dhcp.servers.{SERVER_NICKNAME}.range.special_groups.standalone.4.42_0_6_1.42_0_6_5.unassigned",
             ("2025-05-30 05:49:49.467993", 5),
         ),
     ]
