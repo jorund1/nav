@@ -222,8 +222,13 @@ class DhcpPath:
         Instantiate me from a path to a DHCP stat (either sans metric_name or
         not) from Graphite.
 
-        > my_path = Path.from_external_info(...)
-        > Path.from_graphite_path(my_path.to_graphite_path("foo")) == my_path
+        >>> d = {"server_name": "foo", "allocation_type": "pool",
+        ...   "group_name": None, "first_ip": "::1", "last_ip": "::2"}
+        >>> my_path = DhcpPath.from_external_info(**d)
+        >>> graphite_path = my_path.to_graphite_path("bar")
+        >>> graphite_path
+        'nav.dhcp.servers.foo.pool.special_groups.standalone.6.0_0_0_0_0_0_0_1.0_0_0_0_0_0_0_2.bar'
+        >>> DhcpPath.from_graphite_path(graphite_path) == my_path
         True
         """
         parts = graphite_path.split(".")
@@ -313,7 +318,7 @@ class DhcpPath:
         """
         Return me as a path recognized by Graphite.
         """
-        if wildcard_for_group and not self._is_standalone():
+        if wildcard_for_group and not self.is_standalone():
             first_ip = safe_name("*")
             last_ip = safe_name("*")
         else:
@@ -336,14 +341,12 @@ class DhcpPath:
         Check if the range of IP addresses between self.first_ip and self.last_ip
         intersect with any of the given prefixes.
         """
-        for prefix in prefixes:
-            if (
-                self.first_ip in prefix
-                or self.last_ip in prefix
-                or self.first_ip < prefix < self.last_ip
-            ):
-                return True
-        return False
+        return any(
+            self.first_ip in prefix
+            or self.last_ip in prefix
+            or self.first_ip < prefix < self.last_ip
+            for prefix in prefixes
+        )
 
     @staticmethod
     def _unescape_graphite_address(escaped_address: str) -> IPy.IP:
@@ -353,7 +356,9 @@ class DhcpPath:
         elif len(parts) == 8:
             return IPy.IP(":".join(parts))
         else:
-            raise ValueError
+            raise ValueError(
+                f"{escaped_address!r} does not look like an escaped IP address"
+            )
 
     @staticmethod
     def _check_ip_pair(first_ip: IPy.IP, last_ip: IPy.IP):
@@ -369,5 +374,5 @@ class DhcpPath:
         if first_ip > last_ip:
             raise ValueError(f"first_ip {first_ip!r} greater than last_ip {last_ip!r}")
 
-    def _is_standalone(self):
+    def is_standalone(self):
         return self.group_name_source == "special_groups" and self.group_name == "standalone"
