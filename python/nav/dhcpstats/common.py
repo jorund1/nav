@@ -27,7 +27,6 @@ import IPy
 
 from nav.metrics.graphs import (
     aliased_series,
-    diffed_series,
     json_graph_url,
     nonempty_series,
     summed_series,
@@ -65,49 +64,37 @@ def fetch_graph_urls_for_prefixes(prefixes: list[IPy.IP]) -> list[str]:
         paths_of_same_group = sorted(paths_of_same_group)
         graph_lines = []
         for path in paths_of_same_group:
-            assigned_addresses = aliased_series(
-                nonempty_series(
+            assigned_addresses = nonempty_series(
+                aliased_series(
                     path.to_graphite_path("assigned"),
+                    name=f"Assigned addresses in {path.allocation_type} {range_str(path.first_ip, path.last_ip)}",
+                    renderer="area",
                 ),
-                name=f"Assigned addresses in {path.first_ip} - {path.last_ip}",
-                renderer="area",
             )
             graph_lines.append(assigned_addresses)
 
         assert len(paths_of_same_group) > 0
         path = paths_of_same_group[0]  # Just select an arbitrary path instance in the group
         unassigned_addresses = aliased_series(
-            diffed_series(
-                summed_series(
-                    nonempty_series(
-                        path.to_graphite_path("total", wildcard_for_group=True)
-                    ),
-                ),
-                summed_series(
-                    nonempty_series(
-                        path.to_graphite_path("assigned", wildcard_for_group=True)
-                    ),
-                ),
+            summed_series(
+                path.to_graphite_path("unassigned", wildcard_for_group=True)
             ),
-            name="Unassigned addresses",
+            name="Total unassigned addresses",
             renderer="area",
             color="#d9d9d9",
         )
         graph_lines.append(unassigned_addresses)
-
         total_addresses = aliased_series(
             summed_series(
-                nonempty_series(
-                    path.to_graphite_path("total", wildcard_for_group=True)
-                ),
+                path.to_graphite_path("total", wildcard_for_group=True)
             ),
             name="Total addresses",
             color="#707070",
         )
         graph_lines.append(total_addresses)
 
-        type_human = path.allocation_type + "s"
-        title = f"DHCP {type_human} in '{path.group_name}' on server '{path.server_name}'"
+        type_human = path.allocation_type + ("" if path.is_standalone() else "s")
+        title = f"{path.group_name} {type_human} on DHCPv{path.ip_version} server '{path.server_name}'"
         graph_urls.append(json_graph_url(*graph_lines, title=title))
     return graph_urls
 
@@ -125,7 +112,7 @@ def fetch_paths_from_graphite():
         group_name=safe_name("*"),
         first_ip=safe_name("*"),
         last_ip=safe_name("*"),
-        metric_name="total",
+        metric_name="assigned",
     )
     graphite_paths = get_expanded_nodes(wildcard)
 
@@ -174,6 +161,37 @@ def drop_groups_not_in_prefixes(grouped_paths: list[list["DhcpPath"]], prefixes:
         ):
             grouped_paths_to_keep.append(paths_of_same_group)
     return grouped_paths_to_keep
+
+
+def range_str(first_ip: IPy.IP, last_ip: IPy.IP):
+    """
+    Returns a human-readable string that represents the range of IP addresses
+    between first_ip and last_ip (inclusive). If the addresses comprise a CIDR
+    block, CIDR notation is used. Otherwise, an ad-hoc notation is used.
+
+    >>> range_str(IPy.IP("192.0.0.32"), IPy.IP("192.0.0.63"))
+    "192.0.0.32/27"
+    >>> range_str(IPy.IP("192.0.0.31"), IPy.IP("192.0.0.63"))
+    "192.0.0.31-192.0.0.63"
+    >>> range_str(IPy.IP("192.0.0.32"), IPy.IP("192.0.0.64"))
+    "192.0.0.32-192.0.0.64"
+    """
+    fallback = f"{first_ip}-{last_ip}"
+    if first_ip.version() == last_ip.version() == 4:
+        totalbits = 32
+    elif first_ip.version() == last_ip.version() == 6:
+        totalbits = 128
+    else:
+        return fallback
+    hostbits = (last_ip.int() - first_ip.int()).bit_length()
+    try:
+        net = IPy.IP(f"{first_ip}/{totalbits-hostbits}")
+    except ValueError:
+        return fallback
+    if net[0] == first_ip and net[-1] == last_ip:
+        return str(net)
+    else:
+        return fallback
 
 
 @dataclass(frozen=True, order=True)
