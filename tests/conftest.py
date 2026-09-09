@@ -1,7 +1,10 @@
 """pytest setup and fixtures common for all tests, regardless of suite"""
 
+import os
 import platform
+import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -28,84 +31,147 @@ def pytest_configure(config):
 
         install()
 
+def assertdir(dir):
+    dir = Path(dir)
+    if not dir.is_dir():
+        pytest.skip(
+            f"Graphite is not available: expected to find directory {str(dir)!r}"
+        )
+    return dir
+
+def assertfile(file):
+    file = Path(file)
+    if not file.is_file():
+        pytest.skip(
+            f"Graphite is not available: expected to find file {str(file)!r}"
+        )
+    return file
 
 @pytest.fixture(scope='session')
 def graphite_web(tmp_path_factory):
     """
-    Fixture for all tests that depend on a running Graphite web server.
+    Fixture for all tests that depend on a fresh, up-and-running Graphite web
+    server.
 
-    Assumes that tests are being run inside a Debian chroot with graphite-web
-    installed.
+    Tests using this fixture only run when graphite-web is installed. For
+    graphite-web to be deemed "installed", the following information needs to be
+    found:
+
+      1. The path to the django-admin executable. Found by
+         - calling `shtuil.which('django-admin')`.
+      2. The root-directory of the graphite-web install. Found by
+         - looking at `os.environ['GRAPHITE_ROOT']`, or, if that fails, by
+         - defaulting to the directory used in a Debian install.
+      3. The root-directory of the graphite-web installation's static content.
+         Found by
+         - looking at `os.environ['GRAPHITE_STATIC_ROOT']`, or if that fails, by
+         - defaulting to the directory used in a Debian install, or if that doesn't
+           exist, by
+         - populating a temporary directory with the necessary files.
     """
 
-    # Debian locatins
-    debian_bin = Path("/usr/bin")
-    debian_django_admin = Path("/usr/bin/django-admin")
-    debian_graphite_lib = Path("/usr/lib/python3/dist-packages/graphite/")
-    debian_graphite_root = Path('/usr/share/graphite-web')
-    debian_graphite_static = Path('/usr/share/graphite-web/static')
+def run():
+    # Fallback install paths
+    debian_django_admin = "/usr/bin/django-admin"
+    debian_graphite_root = "/usr/share/graphite-web"
+    debian_graphite_static = "/usr/share/graphite-web/static"
 
-    if (
-        not debian_django_admin.is_file()
-        or not debian_graphite_lib.is_dir()
-        or not debian_graphite_root.is_dir()
-        or not debian_graphite_static.is_dir()
-    ):
-        pytest.skip("Graphite is not available")
+    # Used install paths
+    django_admin = Path(shutil.which("django-admin") or debian_django_admin)
+    graphite_root = Path(os.environ.get("GRAPHITE_ROOT") or debian_graphite_root)
+    graphite_static = Path(os.environ.get("GRAPHITE_STATIC_ROOT") or debian_graphite_static)
 
-    port = 54322  # 54321 is used by the :func fake_graphite_web_server: fixture
-    addr = "127.0.0.1"
-    addrport = f"{addr}:{port}"
+    if not django_admin.is_file():
+        pytest.skip(
+            "Graphite is not available (could not find the 'django-admin' executable)"
+        )
+    if not graphite_root.is_dir():
+        pytest.skip(
+            "Graphite is not available (could not find Graphite's root directory)"
+        )
+    if not graphite_static.is_dir():
+        pytest.skip(
+            "Graphite is not available (could not find Graphite's static directory)"
+        )
 
     def mkdir(dir):
         dir.mkdir(parents=True, exist_ok=True)
         return dir
 
-    tmp = tmp_path_factory.mktemp("graphite-web-")
-    conf_dir = mkdir(tmp / 'conf')
-    storage_dir = mkdir(tmp / 'storage')
-    log_dir = mkdir(tmp / 'log')
-    index_file = mkdir(tmp / 'storage') / 'search_index'
-    whisper_dir = mkdir(tmp / 'storage' / 'whisper')
+    tmp_dir = mkdir(Path("/tmp/graphite/data"))
+    tmp_codegen_dir = mkdir(tmp_dir / 'codegen')
+    tmp_conf_dir = mkdir(tmp_dir / 'conf')
+    tmp_storage_dir = mkdir(tmp_dir / 'storage')
+    tmp_log_dir = mkdir(tmp_dir / 'log')
+    tmp_index_file = mkdir(tmp_dir / 'storage') / 'search_index'
+    tmp_whisper_dir = mkdir(tmp_dir / 'storage' / 'whisper')
 
-    # This local_settings.py works with a Debian graphite-web install
     local_settings = {
-        'LOG_ROTATION': False,
         'GRAPHITE_ROOT': str(debian_graphite_root),
         'STATIC_ROOT': str(debian_graphite_static),
-        'CONF_DIR': str(conf_dir),
-        'STORAGE_DIR': str(storage_dir),
-        'LOG_DIR': str(log_dir),
-        'INDEX_FILE': str(index_file),
-        'WHISPER_DIR': str(whisper_dir),
+        'CONF_DIR': str(tmp_conf_dir),
+        'STORAGE_DIR': str(tmp_storage_dir),
+        'LOG_DIR': str(tmp_log_dir),
+        'INDEX_FILE': str(tmp_index_file),
+        'WHISPER_DIR': str(tmp_whisper_dir),
         'DEFAULT_CACHE_DURATION': 0,
+        'LOG_ROTATION': False,
     }
-    content = (
+    local_settings_codegen = (
         "# Autogenerated by NAV's test suite\n"
         "# This file should have been deleted after finishing the test suite\n"
         + "\n".join(f"{key} = {value!r}" for key, value in local_settings.items())
     )
-    with open(conf_dir / "local_settings.py", "w") as f:
-        f.write(content)
+    with open(tmp_codegen_dir / "local_settings.py", "w") as f:
+        f.write(local_settings_codegen)
 
-    print("Using test Graphite web server:", addrport)
     process = subprocess.Popen(
         [
             debian_django_admin,
-            "runserver",
+            "runserver",  #TODO: use "testserver" instead (which see docs)
             "--settings",
             "graphite.settings",
-            addrport,
+            "--pythonpath",
+            tmp_codegen_dir,
+            "--nothreading",
+            "--noreload",
+            "--skip-checks",
+            "127.0.0.1:0",
         ],
         env={
-            "PATH": str(debian_bin),
-            "PYTHONPATH": str(conf_dir),
             "GRAPHITE_SETTINGS_MODULE": "local_settings",
+            "DJANGO_RUNSERVER_HIDE_WARNING": "true",
         },
+        text=False,
+        stdout=subprocess.PIPE,
+        cwd=tmp_dir,
     )
-
-    time.sleep(2)
-    yield "http://" + addrport
+    os.set_blocking(process.stdout.fileno(), False)
+    start = time.monotonic()
+    timeout = 30.0
+    location = None
+    location_pattern = re.compile(rb"\bhttps?://127.0.0.1:\d+\b", flags=re.IGNORECASE)
+    sleep_backoff = 1e-3
+    output = b""
+    try:
+        while (new_output := process.stdout.read()) or process.poll() is None:
+            if new_output:
+                output += new_output
+                if (m := location_pattern.search(output)):
+                    location = m.group(0).decode() + "/"
+                    break
+            if time.monotonic() - start > timeout:
+                break
+            if not new_output:
+                time.sleep(sleep_backoff)
+                sleep_backoff *= 2
+    except Exception:
+        process.terminate()
+        raise
+    if not location:
+        process.terminate()
+        raise ValueError
+    yield location
     process.terminate()
     print("Graphite web server fixture is done")
 
